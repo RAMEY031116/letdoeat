@@ -69,6 +69,36 @@ def build_outlook_calendar_url(task_row: dict) -> str:
         f"&subject={title}&body={body}&startdt={start_iso}&enddt={end_iso}"
     )
 
+def create_ics_content(task_row: dict) -> str:
+    task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
+
+    if task_row.get("task_time"):
+        task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
+    else:
+        task_time = time(9, 0)
+
+    start_dt = datetime.combine(task_date, task_time)
+    end_dt = start_dt + timedelta(minutes=60)
+
+    start_ics = start_dt.strftime("%Y%m%dT%H%M%S")
+    end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
+
+    title = safe_str(task_row.get("title", "")).replace("\n", " ")
+    notes = safe_str(task_row.get("notes", "")).replace("\n", "\\n")
+
+    ics_content = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Lets Do Eat//EN
+BEGIN:VEVENT
+SUMMARY:{title}
+DESCRIPTION:{notes}
+DTSTART:{start_ics}
+DTEND:{end_ics}
+END:VEVENT
+END:VCALENDAR
+"""
+    return ics_content
+
 def fetch_tasks():
     response = (
         supabase.table("tasks")
@@ -247,24 +277,32 @@ else:
                     delete_task(row["id"])
                     st.rerun()
 
+                task_payload = {
+                    "title": row["title"],
+                    "notes": row["notes"],
+                    "task_date": row["task_date"].strftime("%Y-%m-%d"),
+                    "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
+                }
+
+                ics_content = create_ics_content(task_payload)
+
+                st.download_button(
+                    "Add to Apple Calendar",
+                    data=ics_content,
+                    file_name=f"{row['title']}.ics",
+                    mime="text/calendar",
+                    key=f"apple_{row['id']}",
+                    use_container_width=True,
+                )
+
                 st.link_button(
-                    "Add to Personal Calendar",
-                    build_google_calendar_url({
-                        "title": row["title"],
-                        "notes": row["notes"],
-                        "task_date": row["task_date"].strftime("%Y-%m-%d"),
-                        "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
-                    }),
+                    "Add to Google Calendar",
+                    build_google_calendar_url(task_payload),
                     use_container_width=True,
                 )
 
                 st.link_button(
                     "Add to Work Calendar",
-                    build_outlook_calendar_url({
-                        "title": row["title"],
-                        "notes": row["notes"],
-                        "task_date": row["task_date"].strftime("%Y-%m-%d"),
-                        "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
-                    }),
+                    build_outlook_calendar_url(task_payload),
                     use_container_width=True,
                 )
