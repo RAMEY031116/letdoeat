@@ -7,13 +7,13 @@ import streamlit as st
 from supabase import create_client, Client
 
 st.set_page_config(
-    page_title="Task Router",
+    page_title="Lets Do Eat",
     page_icon="🗂️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-st.title("🗂️ Task Router")
+st.title("🗂️ Lets Do Eat")
 st.caption("A simple personal dashboard for tasks, calendar routing, and notes.")
 
 @st.cache_resource
