@@ -6,6 +6,10 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
+
+# ---------------------------
+# App setup
+# ---------------------------
 st.set_page_config(
     page_title="Lets Do Eat",
     page_icon="🗂️",
@@ -14,9 +18,12 @@ st.set_page_config(
 )
 
 st.title("🗂️ Lets Do Eat")
-st.caption("Personal dashboard with login, tasks, notes, and calendar routing.")
+st.caption("Tasks, sticky notes, and calendar routing in one dashboard.")
 
 
+# ---------------------------
+# Supabase connection
+# ---------------------------
 @st.cache_resource
 def get_supabase() -> Client:
     url = os.getenv("SUPABASE_URL", "")
@@ -32,8 +39,21 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 
+# ---------------------------
+# Small helpers
+# ---------------------------
 def safe_str(value):
     return "" if value is None else str(value)
+
+
+def get_current_user():
+    try:
+        result = supabase.auth.get_user()
+        if result and result.user:
+            return result.user
+    except Exception:
+        return None
+    return None
 
 
 def format_dt_for_google(start_dt: datetime, end_dt: datetime) -> tuple[str, str]:
@@ -42,6 +62,7 @@ def format_dt_for_google(start_dt: datetime, end_dt: datetime) -> tuple[str, str
 
 def build_google_calendar_url(task_row: dict) -> str:
     task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
+
     if task_row.get("task_time"):
         task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
     else:
@@ -63,6 +84,7 @@ def build_google_calendar_url(task_row: dict) -> str:
 
 def build_outlook_calendar_url(task_row: dict) -> str:
     task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
+
     if task_row.get("task_time"):
         task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
     else:
@@ -112,6 +134,9 @@ END:VCALENDAR
 """
 
 
+# ---------------------------
+# Auth
+# ---------------------------
 def init_auth_state():
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
@@ -192,6 +217,9 @@ def show_auth_screen():
                     st.error(f"Sign up failed: {e}")
 
 
+# ---------------------------
+# Tasks
+# ---------------------------
 def fetch_tasks():
     response = (
         supabase.table("tasks")
@@ -205,8 +233,8 @@ def fetch_tasks():
 
 
 def add_task(title, notes, priority, task_date, task_time, is_work, is_personal):
-    user = supabase.auth.get_user()
-    user_id = user.user.id if user and user.user else None
+    user = get_current_user()
+    user_id = user.id if user else None
 
     payload = {
         "title": title,
@@ -235,6 +263,37 @@ def delete_task(task_id):
     supabase.table("tasks").delete().eq("id", task_id).execute()
 
 
+# ---------------------------
+# Sticky notes
+# ---------------------------
+def fetch_notes():
+    response = (
+        supabase.table("notes")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data if response.data else []
+
+
+def add_note(content):
+    user = get_current_user()
+    user_id = user.id if user else None
+
+    payload = {
+        "content": content,
+        "user_id": user_id,
+    }
+    supabase.table("notes").insert(payload).execute()
+
+
+def delete_note(note_id):
+    supabase.table("notes").delete().eq("id", note_id).execute()
+
+
+# ---------------------------
+# Auth start
+# ---------------------------
 init_auth_state()
 try_restore_session()
 
@@ -244,6 +303,7 @@ with top_left:
         st.caption(f"Signed in as: {st.session_state.user_email}")
     else:
         st.caption("Not signed in")
+
 with top_right:
     if st.session_state.user_email:
         if st.button("Logout", use_container_width=True):
@@ -259,6 +319,9 @@ if not st.session_state.user_email:
     st.stop()
 
 
+# ---------------------------
+# Small UI styling
+# ---------------------------
 st.markdown(
     '''
     <style>
@@ -266,20 +329,31 @@ st.markdown(
         font-size: 0.85rem;
         color: #6b7280;
     }
+    .sticky-box {
+        background-color: #fff7cc;
+        padding: 0.8rem;
+        border-radius: 0.6rem;
+        border: 1px solid #f2e48a;
+        margin-bottom: 0.5rem;
+    }
     div[data-testid="stMetricValue"] {
-        font-size: 1.35rem;
+        font-size: 1.3rem;
     }
     </style>
     ''',
     unsafe_allow_html=True,
 )
 
+
+# ---------------------------
+# Add task area
+# ---------------------------
 with st.expander("➕ Quick add task", expanded=False):
     col1, col2 = st.columns([2, 1])
 
     with col1:
         title = st.text_input("Task title", placeholder="Example: Finish notes, Gym, Review tickets")
-        notes = st.text_area("Notes", placeholder="Optional details...", height=80)
+        task_notes = st.text_area("Task notes", placeholder="Optional details...", height=80)
 
     with col2:
         priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
@@ -296,7 +370,7 @@ with st.expander("➕ Quick add task", expanded=False):
         else:
             add_task(
                 title=title.strip(),
-                notes=notes.strip(),
+                notes=task_notes.strip(),
                 priority=priority,
                 task_date=task_date,
                 task_time=task_time if use_time else None,
@@ -306,190 +380,243 @@ with st.expander("➕ Quick add task", expanded=False):
             st.success("Task added.")
             st.rerun()
 
+
+# ---------------------------
+# Add sticky note area
+# ---------------------------
+with st.expander("📝 Quick sticky note", expanded=False):
+    note_content = st.text_area("Write a quick note", placeholder="Idea, reminder, thought, draft...", height=120)
+    if st.button("Add note", use_container_width=True):
+        if not note_content.strip():
+            st.warning("Please write something in the note.")
+        else:
+            add_note(note_content.strip())
+            st.success("Note added.")
+            st.rerun()
+
+
+# ---------------------------
+# Load tasks
+# ---------------------------
 tasks = fetch_tasks()
 df = pd.DataFrame(tasks)
 
-if df.empty:
-    st.info("No tasks yet. Open 'Quick add task' above and add your first one.")
-    st.stop()
-
-df["task_date"] = pd.to_datetime(df["task_date"]).dt.date
-df["tag_label"] = df.apply(
-    lambda row: "Both" if row["is_work"] and row["is_personal"]
-    else "Work" if row["is_work"]
-    else "Personal",
-    axis=1
-)
-today = date.today()
-df["is_overdue"] = (df["task_date"] < today) & (~df["completed"])
-priority_order = {"High": 0, "Medium": 1, "Low": 2}
-df["priority_sort"] = df["priority"].map(priority_order).fillna(9)
-
-m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Total", int(len(df)))
-m2.metric("Done", int(df["completed"].sum()))
-m3.metric("Pending", int((~df["completed"]).sum()))
-m4.metric("Overdue", int(df["is_overdue"].sum()))
-m5.metric("High", int((df["priority"] == "High").sum()))
-m6.metric("Today", int((df["task_date"] == today).sum()))
-
-with st.container(border=True):
-    f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
-
-    with f1:
-        search_text = st.text_input("Search", placeholder="Search title or notes", label_visibility="collapsed")
-        st.caption("Search")
-
-    with f2:
-        selected_date = st.date_input("Date", value=None, label_visibility="collapsed")
-        st.caption("Date")
-
-    with f3:
-        tag_filter = st.selectbox("Tag", ["All", "Work", "Personal", "Both"], label_visibility="collapsed")
-        st.caption("Tag")
-
-    with f4:
-        status_filter = st.selectbox("Status", ["All", "Pending", "Completed", "Overdue"], label_visibility="collapsed")
-        st.caption("Status")
-
-    with f5:
-        sort_by = st.selectbox("Sort", ["Due date", "Priority", "Newest first"], label_visibility="collapsed")
-        st.caption("Sort")
-
-    with f6:
-        hide_completed = st.checkbox("Hide done", value=False)
-
-quick1, quick2, quick3, quick4 = st.columns(4)
-with quick1:
-    if st.button("Today only", use_container_width=True):
-        st.session_state["quick_filter"] = "today"
-with quick2:
-    if st.button("High priority", use_container_width=True):
-        st.session_state["quick_filter"] = "high"
-with quick3:
-    if st.button("Overdue", use_container_width=True):
-        st.session_state["quick_filter"] = "overdue"
-with quick4:
-    if st.button("Clear quick filter", use_container_width=True):
-        st.session_state["quick_filter"] = "all"
-
-quick_filter = st.session_state.get("quick_filter", "all")
-filtered_df = df.copy()
-
-if search_text.strip():
-    search_value = search_text.strip().lower()
-    filtered_df = filtered_df[
-        filtered_df["title"].str.lower().str.contains(search_value, na=False)
-        | filtered_df["notes"].fillna("").str.lower().str.contains(search_value, na=False)
-    ]
-
-if selected_date:
-    filtered_df = filtered_df[filtered_df["task_date"] == selected_date]
-
-if tag_filter != "All":
-    filtered_df = filtered_df[filtered_df["tag_label"] == tag_filter]
-
-if status_filter == "Pending":
-    filtered_df = filtered_df[filtered_df["completed"] == False]
-elif status_filter == "Completed":
-    filtered_df = filtered_df[filtered_df["completed"] == True]
-elif status_filter == "Overdue":
-    filtered_df = filtered_df[filtered_df["is_overdue"] == True]
-
-if hide_completed:
-    filtered_df = filtered_df[filtered_df["completed"] == False]
-
-if quick_filter == "today":
-    filtered_df = filtered_df[filtered_df["task_date"] == today]
-elif quick_filter == "high":
-    filtered_df = filtered_df[filtered_df["priority"] == "High"]
-elif quick_filter == "overdue":
-    filtered_df = filtered_df[filtered_df["is_overdue"] == True]
-
-if sort_by == "Due date":
-    filtered_df = filtered_df.sort_values(by=["completed", "task_date", "priority_sort"])
-elif sort_by == "Priority":
-    filtered_df = filtered_df.sort_values(by=["completed", "priority_sort", "task_date"])
-elif sort_by == "Newest first":
-    filtered_df = filtered_df.sort_values(by=["created_at"], ascending=False)
-
-with st.expander("📅 Calendar quick jump", expanded=False):
-    calendar_date = st.date_input("Click a date", value=today, key="calendar_jump")
-    if st.button("Show tasks for this date", use_container_width=True):
-        filtered_df = filtered_df[filtered_df["task_date"] == calendar_date]
-
-st.subheader(f"Tasks ({len(filtered_df)})")
-
-if filtered_df.empty:
-    st.info("No tasks match your filters.")
+if not df.empty:
+    df["task_date"] = pd.to_datetime(df["task_date"]).dt.date
+    df["tag_label"] = df.apply(
+        lambda row: "Both" if row["is_work"] and row["is_personal"]
+        else "Work" if row["is_work"]
+        else "Personal",
+        axis=1
+    )
+    today = date.today()
+    df["is_overdue"] = (df["task_date"] < today) & (~df["completed"])
+    priority_order = {"High": 0, "Medium": 1, "Low": 2}
+    df["priority_sort"] = df["priority"].map(priority_order).fillna(9)
 else:
-    for _, row in filtered_df.iterrows():
-        status_icon = "✅" if row["completed"] else "⏳"
-        overdue_text = " • OVERDUE" if row["is_overdue"] else ""
+    today = date.today()
 
-        with st.container(border=True):
-            top_left, top_right = st.columns([5, 2])
 
-            with top_left:
-                st.markdown(f"**{status_icon} {row['title']}**")
-                when_text = f"{row['task_date']}"
-                if row["task_time"] and row["task_time"] != "None":
-                    when_text += f" at {str(row['task_time'])[:5]}"
+# ---------------------------
+# Dashboard
+# ---------------------------
+if not df.empty:
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1.metric("Total", int(len(df)))
+    m2.metric("Done", int(df["completed"].sum()))
+    m3.metric("Pending", int((~df["completed"]).sum()))
+    m4.metric("Overdue", int(df["is_overdue"].sum()))
+    m5.metric("High", int((df["priority"] == "High").sum()))
+    m6.metric("Today", int((df["task_date"] == today).sum()))
+else:
+    st.info("No tasks yet. Add your first task above.")
 
-                st.markdown(
-                    f"<div class='small-muted'>"
-                    f"{row['priority']} • {row['tag_label']} • {when_text}{overdue_text}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
 
-                if safe_str(row["notes"]).strip():
-                    with st.expander("Notes"):
-                        st.write(row["notes"])
+# ---------------------------
+# Filters
+# ---------------------------
+filtered_df = df.copy() if not df.empty else pd.DataFrame()
 
-            with top_right:
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button(
-                        "Undo" if row["completed"] else "Done",
-                        key=f"complete_{row['id']}",
-                        use_container_width=True,
-                    ):
-                        mark_complete(row["id"], not row["completed"])
-                        st.rerun()
+if not df.empty:
+    with st.container(border=True):
+        f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
 
-                with c2:
-                    if st.button("Delete", key=f"delete_{row['id']}", use_container_width=True):
-                        delete_task(row["id"])
-                        st.rerun()
+        with f1:
+            search_text = st.text_input("Search", placeholder="Search title or notes", label_visibility="collapsed")
+            st.caption("Search")
 
-                task_payload = {
-                    "title": row["title"],
-                    "notes": row["notes"],
-                    "task_date": row["task_date"].strftime("%Y-%m-%d"),
-                    "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
-                }
+        with f2:
+            selected_date = st.date_input("Date", value=None, label_visibility="collapsed")
+            st.caption("Date")
 
-                with st.expander("Calendar options"):
-                    ics_content = create_ics_content(task_payload)
+        with f3:
+            tag_filter = st.selectbox("Tag", ["All", "Work", "Personal", "Both"], label_visibility="collapsed")
+            st.caption("Tag")
 
-                    st.download_button(
-                        "Apple Calendar",
-                        data=ics_content,
-                        file_name=f"{row['title']}.ics",
-                        mime="text/calendar",
-                        key=f"apple_{row['id']}",
-                        use_container_width=True,
+        with f4:
+            status_filter = st.selectbox("Status", ["All", "Pending", "Completed", "Overdue"], label_visibility="collapsed")
+            st.caption("Status")
+
+        with f5:
+            sort_by = st.selectbox("Sort", ["Due date", "Priority", "Newest first"], label_visibility="collapsed")
+            st.caption("Sort")
+
+        with f6:
+            hide_completed = st.checkbox("Hide done", value=False)
+
+    quick1, quick2, quick3, quick4 = st.columns(4)
+    with quick1:
+        if st.button("Today only", use_container_width=True):
+            st.session_state["quick_filter"] = "today"
+    with quick2:
+        if st.button("High priority", use_container_width=True):
+            st.session_state["quick_filter"] = "high"
+    with quick3:
+        if st.button("Overdue", use_container_width=True):
+            st.session_state["quick_filter"] = "overdue"
+    with quick4:
+        if st.button("Clear quick filter", use_container_width=True):
+            st.session_state["quick_filter"] = "all"
+
+    quick_filter = st.session_state.get("quick_filter", "all")
+
+    if search_text.strip():
+        search_value = search_text.strip().lower()
+        filtered_df = filtered_df[
+            filtered_df["title"].str.lower().str.contains(search_value, na=False)
+            | filtered_df["notes"].fillna("").str.lower().str.contains(search_value, na=False)
+        ]
+
+    if selected_date:
+        filtered_df = filtered_df[filtered_df["task_date"] == selected_date]
+
+    if tag_filter != "All":
+        filtered_df = filtered_df[filtered_df["tag_label"] == tag_filter]
+
+    if status_filter == "Pending":
+        filtered_df = filtered_df[filtered_df["completed"] == False]
+    elif status_filter == "Completed":
+        filtered_df = filtered_df[filtered_df["completed"] == True]
+    elif status_filter == "Overdue":
+        filtered_df = filtered_df[filtered_df["is_overdue"] == True]
+
+    if hide_completed:
+        filtered_df = filtered_df[filtered_df["completed"] == False]
+
+    if quick_filter == "today":
+        filtered_df = filtered_df[filtered_df["task_date"] == today]
+    elif quick_filter == "high":
+        filtered_df = filtered_df[filtered_df["priority"] == "High"]
+    elif quick_filter == "overdue":
+        filtered_df = filtered_df[filtered_df["is_overdue"] == True]
+
+    if sort_by == "Due date":
+        filtered_df = filtered_df.sort_values(by=["completed", "task_date", "priority_sort"])
+    elif sort_by == "Priority":
+        filtered_df = filtered_df.sort_values(by=["completed", "priority_sort", "task_date"])
+    elif sort_by == "Newest first":
+        filtered_df = filtered_df.sort_values(by=["created_at"], ascending=False)
+
+    with st.expander("📅 Calendar quick jump", expanded=False):
+        calendar_date = st.date_input("Click a date", value=today, key="calendar_jump")
+        if st.button("Show tasks for this date", use_container_width=True):
+            filtered_df = filtered_df[filtered_df["task_date"] == calendar_date]
+
+
+# ---------------------------
+# Layout: tasks + notes
+# ---------------------------
+left_col, right_col = st.columns([2, 1])
+
+with left_col:
+    st.subheader(f"Tasks ({len(filtered_df) if not filtered_df.empty else 0})")
+
+    if df.empty or filtered_df.empty:
+        st.info("No tasks match your filters.")
+    else:
+        for _, row in filtered_df.iterrows():
+            status_icon = "✅" if row["completed"] else "⏳"
+            overdue_text = " • OVERDUE" if row["is_overdue"] else ""
+
+            with st.container(border=True):
+                top_left, top_right = st.columns([5, 2])
+
+                with top_left:
+                    st.markdown(f"**{status_icon} {row['title']}**")
+                    when_text = f"{row['task_date']}"
+                    if row["task_time"] and row["task_time"] != "None":
+                        when_text += f" at {str(row['task_time'])[:5]}"
+
+                    st.markdown(
+                        f"<div class='small-muted'>"
+                        f"{row['priority']} • {row['tag_label']} • {when_text}{overdue_text}"
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
 
-                    st.link_button(
-                        "Google Calendar",
-                        build_google_calendar_url(task_payload),
-                        use_container_width=True,
-                    )
+                    if safe_str(row["notes"]).strip():
+                        with st.expander("Notes"):
+                            st.write(row["notes"])
 
-                    st.link_button(
-                        "Work Calendar",
-                        build_outlook_calendar_url(task_payload),
-                        use_container_width=True,
-                    )
+                with top_right:
+                    c1, c2 = st.columns(2)
+
+                    with c1:
+                        if st.button(
+                            "Undo" if row["completed"] else "Done",
+                            key=f"complete_{row['id']}",
+                            use_container_width=True,
+                        ):
+                            mark_complete(row["id"], not row["completed"])
+                            st.rerun()
+
+                    with c2:
+                        if st.button("Delete", key=f"delete_{row['id']}", use_container_width=True):
+                            delete_task(row["id"])
+                            st.rerun()
+
+                    task_payload = {
+                        "title": row["title"],
+                        "notes": row["notes"],
+                        "task_date": row["task_date"].strftime("%Y-%m-%d"),
+                        "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
+                    }
+
+                    with st.expander("Calendar options"):
+                        ics_content = create_ics_content(task_payload)
+
+                        st.download_button(
+                            "Apple Calendar",
+                            data=ics_content,
+                            file_name=f"{row['title']}.ics",
+                            mime="text/calendar",
+                            key=f"apple_{row['id']}",
+                            use_container_width=True,
+                        )
+
+                        st.link_button(
+                            "Google Calendar",
+                            build_google_calendar_url(task_payload),
+                            use_container_width=True,
+                        )
+
+                        st.link_button(
+                            "Work Calendar",
+                            build_outlook_calendar_url(task_payload),
+                            use_container_width=True,
+                        )
+
+with right_col:
+    st.subheader("Sticky Notes")
+
+    notes_data = fetch_notes()
+
+    if not notes_data:
+        st.info("No notes yet.")
+    else:
+        for note in notes_data:
+            with st.container(border=True):
+                st.markdown(f"<div class='sticky-box'>{safe_str(note['content'])}</div>", unsafe_allow_html=True)
+                if st.button("Delete note", key=f"delete_note_{note['id']}", use_container_width=True):
+                    delete_note(note["id"])
+                    st.rerun()
