@@ -6,10 +6,6 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
-
-# ---------------------------
-# App setup
-# ---------------------------
 st.set_page_config(
     page_title="Lets Do Eat",
     page_icon="🗂️",
@@ -18,12 +14,9 @@ st.set_page_config(
 )
 
 st.title("🗂️ Lets Do Eat")
-st.caption("Tasks, sticky notes, and calendar routing in one dashboard.")
+st.caption("Tasks, dashboard notes, and calendar routing in one place.")
 
 
-# ---------------------------
-# Supabase connection
-# ---------------------------
 @st.cache_resource
 def get_supabase() -> Client:
     url = os.getenv("SUPABASE_URL", "")
@@ -39,9 +32,6 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 
-# ---------------------------
-# Small helpers
-# ---------------------------
 def safe_str(value):
     return "" if value is None else str(value)
 
@@ -56,13 +46,12 @@ def get_current_user():
     return None
 
 
-def format_dt_for_google(start_dt: datetime, end_dt: datetime) -> tuple[str, str]:
+def format_dt_for_google(start_dt: datetime, end_dt: datetime):
     return start_dt.strftime("%Y%m%dT%H%M%S"), end_dt.strftime("%Y%m%dT%H%M%S")
 
 
 def build_google_calendar_url(task_row: dict) -> str:
     task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-
     if task_row.get("task_time"):
         task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
     else:
@@ -84,7 +73,6 @@ def build_google_calendar_url(task_row: dict) -> str:
 
 def build_outlook_calendar_url(task_row: dict) -> str:
     task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-
     if task_row.get("task_time"):
         task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
     else:
@@ -106,7 +94,6 @@ def build_outlook_calendar_url(task_row: dict) -> str:
 
 def create_ics_content(task_row: dict) -> str:
     task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-
     if task_row.get("task_time"):
         task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
     else:
@@ -134,9 +121,6 @@ END:VCALENDAR
 """
 
 
-# ---------------------------
-# Auth
-# ---------------------------
 def init_auth_state():
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
@@ -217,9 +201,6 @@ def show_auth_screen():
                     st.error(f"Sign up failed: {e}")
 
 
-# ---------------------------
-# Tasks
-# ---------------------------
 def fetch_tasks():
     response = (
         supabase.table("tasks")
@@ -263,9 +244,6 @@ def delete_task(task_id):
     supabase.table("tasks").delete().eq("id", task_id).execute()
 
 
-# ---------------------------
-# Sticky notes
-# ---------------------------
 def fetch_notes():
     response = (
         supabase.table("notes")
@@ -291,9 +269,6 @@ def delete_note(note_id):
     supabase.table("notes").delete().eq("id", note_id).execute()
 
 
-# ---------------------------
-# Auth start
-# ---------------------------
 init_auth_state()
 try_restore_session()
 
@@ -319,86 +294,83 @@ if not st.session_state.user_email:
     st.stop()
 
 
-# ---------------------------
-# Small UI styling
-# ---------------------------
 st.markdown(
-    '''
+    """
     <style>
     .small-muted {
         font-size: 0.85rem;
         color: #6b7280;
     }
-    .sticky-box {
-        background-color: #fff7cc;
-        padding: 0.8rem;
-        border-radius: 0.6rem;
-        border: 1px solid #f2e48a;
-        margin-bottom: 0.5rem;
+    .note-card {
+        background: #fff8c7;
+        border: 1px solid #f0de73;
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 120px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.3rem;
+        font-size: 1.25rem;
     }
     </style>
-    ''',
+    """,
     unsafe_allow_html=True,
 )
 
+top_action_1, top_action_2 = st.columns(2)
 
-# ---------------------------
-# Add task area
-# ---------------------------
-with st.expander("➕ Quick add task", expanded=False):
-    col1, col2 = st.columns([2, 1])
+with top_action_1:
+    with st.expander("➕ Add task", expanded=False):
+        col1, col2 = st.columns([2, 1])
 
-    with col1:
-        title = st.text_input("Task title", placeholder="Example: Finish notes, Gym, Review tickets")
-        task_notes = st.text_area("Task notes", placeholder="Optional details...", height=80)
+        with col1:
+            title = st.text_input("Task title", placeholder="Example: Finish notes, Gym, Review tickets")
+            task_notes = st.text_area("Task note", placeholder="Optional details related to this task...", height=90)
 
-    with col2:
-        priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
-        task_date = st.date_input("Date", value=date.today())
-        use_time = st.checkbox("Add time", value=False)
-        task_time = st.time_input("Time", value=time(9, 0), disabled=not use_time)
-        tag_options = st.multiselect("Tag this task as", ["Work", "Personal"], default=["Personal"])
+        with col2:
+            priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
+            task_date = st.date_input("Date", value=date.today())
+            use_time = st.checkbox("Add time", value=False)
+            task_time = st.time_input("Time", value=time(9, 0), disabled=not use_time)
+            tag_options = st.multiselect("Tag this task as", ["Work", "Personal"], default=["Personal"])
 
-    if st.button("Add task", type="primary", use_container_width=True):
-        if not title.strip():
-            st.warning("Please enter a task title.")
-        elif len(tag_options) == 0:
-            st.warning("Pick at least one tag: Work or Personal.")
-        else:
-            add_task(
-                title=title.strip(),
-                notes=task_notes.strip(),
-                priority=priority,
-                task_date=task_date,
-                task_time=task_time if use_time else None,
-                is_work="Work" in tag_options,
-                is_personal="Personal" in tag_options,
-            )
-            st.success("Task added.")
-            st.rerun()
+        if st.button("Save task", type="primary", use_container_width=True):
+            if not title.strip():
+                st.warning("Please enter a task title.")
+            elif len(tag_options) == 0:
+                st.warning("Pick at least one tag: Work or Personal.")
+            else:
+                add_task(
+                    title=title.strip(),
+                    notes=task_notes.strip(),
+                    priority=priority,
+                    task_date=task_date,
+                    task_time=task_time if use_time else None,
+                    is_work="Work" in tag_options,
+                    is_personal="Personal" in tag_options,
+                )
+                st.success("Task added.")
+                st.rerun()
 
+with top_action_2:
+    with st.expander("📝 Add dashboard note", expanded=False):
+        note_content = st.text_area(
+            "Quick dashboard note",
+            placeholder="Reminder, thought, quick todo, idea...",
+            height=120,
+        )
+        if st.button("Save note", use_container_width=True):
+            if not note_content.strip():
+                st.warning("Please write something in the note.")
+            else:
+                add_note(note_content.strip())
+                st.success("Note added.")
+                st.rerun()
 
-# ---------------------------
-# Add sticky note area
-# ---------------------------
-with st.expander("📝 Quick sticky note", expanded=False):
-    note_content = st.text_area("Write a quick note", placeholder="Idea, reminder, thought, draft...", height=120)
-    if st.button("Add note", use_container_width=True):
-        if not note_content.strip():
-            st.warning("Please write something in the note.")
-        else:
-            add_note(note_content.strip())
-            st.success("Note added.")
-            st.rerun()
-
-
-# ---------------------------
-# Load tasks
-# ---------------------------
 tasks = fetch_tasks()
+notes_data = fetch_notes()
 df = pd.DataFrame(tasks)
 
 if not df.empty:
@@ -416,10 +388,6 @@ if not df.empty:
 else:
     today = date.today()
 
-
-# ---------------------------
-# Dashboard
-# ---------------------------
 if not df.empty:
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Total", int(len(df)))
@@ -431,18 +399,35 @@ if not df.empty:
 else:
     st.info("No tasks yet. Add your first task above.")
 
+st.subheader("Dashboard Notes")
 
-# ---------------------------
-# Filters
-# ---------------------------
+if not notes_data:
+    st.info("No dashboard notes yet.")
+else:
+    note_columns = st.columns(3)
+    for index, note in enumerate(notes_data):
+        col = note_columns[index % 3]
+        with col:
+            st.markdown(
+                f"<div class='note-card'>{safe_str(note['content'])}</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Delete", key=f"delete_note_{note['id']}", use_container_width=True):
+                delete_note(note["id"])
+                st.rerun()
+
+st.divider()
+
 filtered_df = df.copy() if not df.empty else pd.DataFrame()
 
 if not df.empty:
+    st.subheader("Tasks")
+
     with st.container(border=True):
         f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
 
         with f1:
-            search_text = st.text_input("Search", placeholder="Search title or notes", label_visibility="collapsed")
+            search_text = st.text_input("Search", placeholder="Search title or task notes", label_visibility="collapsed")
             st.caption("Search")
 
         with f2:
@@ -522,16 +507,9 @@ if not df.empty:
         if st.button("Show tasks for this date", use_container_width=True):
             filtered_df = filtered_df[filtered_df["task_date"] == calendar_date]
 
+    st.caption(f"Showing {len(filtered_df)} task(s)")
 
-# ---------------------------
-# Layout: tasks + notes
-# ---------------------------
-left_col, right_col = st.columns([2, 1])
-
-with left_col:
-    st.subheader(f"Tasks ({len(filtered_df) if not filtered_df.empty else 0})")
-
-    if df.empty or filtered_df.empty:
+    if filtered_df.empty:
         st.info("No tasks match your filters.")
     else:
         for _, row in filtered_df.iterrows():
@@ -555,7 +533,7 @@ with left_col:
                     )
 
                     if safe_str(row["notes"]).strip():
-                        with st.expander("Notes"):
+                        with st.expander("Task note"):
                             st.write(row["notes"])
 
                 with top_right:
@@ -605,18 +583,6 @@ with left_col:
                             build_outlook_calendar_url(task_payload),
                             use_container_width=True,
                         )
-
-with right_col:
-    st.subheader("Sticky Notes")
-
-    notes_data = fetch_notes()
-
-    if not notes_data:
-        st.info("No notes yet.")
-    else:
-        for note in notes_data:
-            with st.container(border=True):
-                st.markdown(f"<div class='sticky-box'>{safe_str(note['content'])}</div>", unsafe_allow_html=True)
-                if st.button("Delete note", key=f"delete_note_{note['id']}", use_container_width=True):
-                    delete_note(note["id"])
-                    st.rerun()
+else:
+    st.subheader("Tasks")
+    st.info("No tasks yet.")
