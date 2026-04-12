@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("🗂️ Lets Do Eat")
-st.caption("A cleaner personal dashboard for tasks, notes, and calendar routing.")
+st.caption("Personal dashboard with login, tasks, notes, and calendar routing.")
 
 
 @st.cache_resource
@@ -23,7 +23,7 @@ def get_supabase() -> Client:
     key = os.getenv("SUPABASE_KEY", "")
 
     if not url or not key:
-        st.error("Missing SUPABASE_URL or SUPABASE_KEY in your secrets/environment.")
+        st.error("Missing SUPABASE_URL or SUPABASE_KEY.")
         st.stop()
 
     return create_client(url, key)
@@ -36,7 +36,7 @@ def safe_str(value):
     return "" if value is None else str(value)
 
 
-def format_dt_for_google(start_dt: datetime, end_dt: datetime) -> str:
+def format_dt_for_google(start_dt: datetime, end_dt: datetime) -> tuple[str, str]:
     return start_dt.strftime("%Y%m%dT%H%M%S"), end_dt.strftime("%Y%m%dT%H%M%S")
 
 
@@ -112,6 +112,86 @@ END:VCALENDAR
 """
 
 
+def init_auth_state():
+    if "access_token" not in st.session_state:
+        st.session_state.access_token = None
+    if "refresh_token" not in st.session_state:
+        st.session_state.refresh_token = None
+    if "user_email" not in st.session_state:
+        st.session_state.user_email = None
+
+
+def save_session(auth_response):
+    session = auth_response.session
+    user = auth_response.user
+
+    st.session_state.access_token = session.access_token
+    st.session_state.refresh_token = session.refresh_token
+    st.session_state.user_email = user.email
+
+    supabase.postgrest.auth(session.access_token)
+
+
+def clear_session():
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.user_email = None
+    supabase.postgrest.auth(None)
+
+
+def try_restore_session():
+    if st.session_state.access_token:
+        supabase.postgrest.auth(st.session_state.access_token)
+        return True
+    return False
+
+
+def show_auth_screen():
+    st.subheader("Login or sign up")
+    tab1, tab2 = st.tabs(["Login", "Sign up"])
+
+    with tab1:
+        login_email = st.text_input("Email", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Login", use_container_width=True):
+            if not login_email or not login_password:
+                st.warning("Enter your email and password.")
+            else:
+                try:
+                    result = supabase.auth.sign_in_with_password({
+                        "email": login_email,
+                        "password": login_password,
+                    })
+                    save_session(result)
+                    st.success("Logged in.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+
+    with tab2:
+        signup_email = st.text_input("Email ", key="signup_email")
+        signup_password = st.text_input("Password ", type="password", key="signup_password")
+
+        if st.button("Create account", use_container_width=True):
+            if not signup_email or not signup_password:
+                st.warning("Enter your email and password.")
+            else:
+                try:
+                    result = supabase.auth.sign_up({
+                        "email": signup_email,
+                        "password": signup_password,
+                    })
+                    if getattr(result, "session", None) and getattr(result, "user", None):
+                        save_session(result)
+                        st.success("Account created and logged in.")
+                        st.rerun()
+                    else:
+                        st.success("Account created. Check your email if confirmation is enabled.")
+                except Exception as e:
+                    st.error(f"Sign up failed: {e}")
+
+
 def fetch_tasks():
     response = (
         supabase.table("tasks")
@@ -125,6 +205,9 @@ def fetch_tasks():
 
 
 def add_task(title, notes, priority, task_date, task_time, is_work, is_personal):
+    user = supabase.auth.get_user()
+    user_id = user.user.id if user and user.user else None
+
     payload = {
         "title": title,
         "notes": notes,
@@ -134,6 +217,7 @@ def add_task(title, notes, priority, task_date, task_time, is_work, is_personal)
         "is_work": is_work,
         "is_personal": is_personal,
         "completed": False,
+        "user_id": user_id,
     }
     supabase.table("tasks").insert(payload).execute()
 
@@ -151,32 +235,45 @@ def delete_task(task_id):
     supabase.table("tasks").delete().eq("id", task_id).execute()
 
 
-# ---------------------------
-# small style tweaks
-# ---------------------------
+init_auth_state()
+try_restore_session()
+
+top_left, top_right = st.columns([3, 1])
+with top_left:
+    if st.session_state.user_email:
+        st.caption(f"Signed in as: {st.session_state.user_email}")
+    else:
+        st.caption("Not signed in")
+with top_right:
+    if st.session_state.user_email:
+        if st.button("Logout", use_container_width=True):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            clear_session()
+            st.rerun()
+
+if not st.session_state.user_email:
+    show_auth_screen()
+    st.stop()
+
+
 st.markdown(
-    """
+    '''
     <style>
     .small-muted {
         font-size: 0.85rem;
         color: #6b7280;
     }
-    .task-card {
-        padding: 0.35rem 0.2rem;
-        margin-bottom: 0.2rem;
-    }
     div[data-testid="stMetricValue"] {
         font-size: 1.35rem;
     }
     </style>
-    """,
+    ''',
     unsafe_allow_html=True,
 )
 
-
-# ---------------------------
-# quick add in expander
-# ---------------------------
 with st.expander("➕ Quick add task", expanded=False):
     col1, col2 = st.columns([2, 1])
 
@@ -209,7 +306,6 @@ with st.expander("➕ Quick add task", expanded=False):
             st.success("Task added.")
             st.rerun()
 
-
 tasks = fetch_tasks()
 df = pd.DataFrame(tasks)
 
@@ -226,13 +322,9 @@ df["tag_label"] = df.apply(
 )
 today = date.today()
 df["is_overdue"] = (df["task_date"] < today) & (~df["completed"])
-
 priority_order = {"High": 0, "Medium": 1, "Low": 2}
 df["priority_sort"] = df["priority"].map(priority_order).fillna(9)
 
-# ---------------------------
-# compact top dashboard
-# ---------------------------
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Total", int(len(df)))
 m2.metric("Done", int(df["completed"].sum()))
@@ -241,9 +333,6 @@ m4.metric("Overdue", int(df["is_overdue"].sum()))
 m5.metric("High", int((df["priority"] == "High").sum()))
 m6.metric("Today", int((df["task_date"] == today).sum()))
 
-# ---------------------------
-# compact filters
-# ---------------------------
 with st.container(border=True):
     f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
 
@@ -285,7 +374,6 @@ with quick4:
         st.session_state["quick_filter"] = "all"
 
 quick_filter = st.session_state.get("quick_filter", "all")
-
 filtered_df = df.copy()
 
 if search_text.strip():
@@ -325,17 +413,11 @@ elif sort_by == "Priority":
 elif sort_by == "Newest first":
     filtered_df = filtered_df.sort_values(by=["created_at"], ascending=False)
 
-# ---------------------------
-# mini calendar area
-# ---------------------------
 with st.expander("📅 Calendar quick jump", expanded=False):
     calendar_date = st.date_input("Click a date", value=today, key="calendar_jump")
     if st.button("Show tasks for this date", use_container_width=True):
         filtered_df = filtered_df[filtered_df["task_date"] == calendar_date]
 
-# ---------------------------
-# task list
-# ---------------------------
 st.subheader(f"Tasks ({len(filtered_df)})")
 
 if filtered_df.empty:
