@@ -323,6 +323,7 @@ st.markdown(
     }
     .note-card {
         background: #fff8c7;
+        color: #111827;
         border: 1px solid #f0de73;
         border-radius: 12px;
         padding: 14px;
