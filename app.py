@@ -13,10 +13,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.title("🗂️ Lets Do Eat")
-st.caption("Tasks, dashboard notes, and calendar routing in one place.")
 
-
+# ---------------------------
+# Supabase connection
+# ---------------------------
 @st.cache_resource
 def get_supabase() -> Client:
     url = os.getenv("SUPABASE_URL", "")
@@ -32,6 +32,9 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 
 
+# ---------------------------
+# Helpers
+# ---------------------------
 def safe_str(value):
     return "" if value is None else str(value)
 
@@ -121,6 +124,9 @@ END:VCALENDAR
 """
 
 
+# ---------------------------
+# Auth
+# ---------------------------
 def init_auth_state():
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
@@ -156,14 +162,14 @@ def try_restore_session():
 
 
 def show_auth_screen():
-    st.subheader("Login or sign up")
+    st.markdown("## Login or sign up")
     tab1, tab2 = st.tabs(["Login", "Sign up"])
 
     with tab1:
         login_email = st.text_input("Email", key="login_email")
         login_password = st.text_input("Password", type="password", key="login_password")
 
-        if st.button("Login", use_container_width=True):
+        if st.button("Login", key="login_btn", use_container_width=True):
             if not login_email or not login_password:
                 st.warning("Enter your email and password.")
             else:
@@ -182,7 +188,7 @@ def show_auth_screen():
         signup_email = st.text_input("Email ", key="signup_email")
         signup_password = st.text_input("Password ", type="password", key="signup_password")
 
-        if st.button("Create account", use_container_width=True):
+        if st.button("Create account", key="signup_btn", use_container_width=True):
             if not signup_email or not signup_password:
                 st.warning("Enter your email and password.")
             else:
@@ -201,6 +207,9 @@ def show_auth_screen():
                     st.error(f"Sign up failed: {e}")
 
 
+# ---------------------------
+# Tasks
+# ---------------------------
 def fetch_tasks():
     response = (
         supabase.table("tasks")
@@ -244,6 +253,9 @@ def delete_task(task_id):
     supabase.table("tasks").delete().eq("id", task_id).execute()
 
 
+# ---------------------------
+# Dashboard notes
+# ---------------------------
 def fetch_notes():
     response = (
         supabase.table("notes")
@@ -269,34 +281,42 @@ def delete_note(note_id):
     supabase.table("notes").delete().eq("id", note_id).execute()
 
 
+# ---------------------------
+# App start
+# ---------------------------
 init_auth_state()
 try_restore_session()
-
-top_left, top_right = st.columns([3, 1])
-with top_left:
-    if st.session_state.user_email:
-        st.caption(f"Signed in as: {st.session_state.user_email}")
-    else:
-        st.caption("Not signed in")
-
-with top_right:
-    if st.session_state.user_email:
-        if st.button("Logout", use_container_width=True):
-            try:
-                supabase.auth.sign_out()
-            except Exception:
-                pass
-            clear_session()
-            st.rerun()
-
-if not st.session_state.user_email:
-    show_auth_screen()
-    st.stop()
-
 
 st.markdown(
     """
     <style>
+    .logo-wrap {
+        display:flex;
+        align-items:center;
+        gap:12px;
+        margin-bottom: 10px;
+    }
+    .logo-badge {
+        width:56px;
+        height:56px;
+        border-radius:16px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        font-size:28px;
+        background: linear-gradient(135deg, #fff2b3, #ffd166);
+        border:1px solid #f3cf55;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+    .logo-title {
+        font-size: 1.9rem;
+        font-weight: 700;
+        line-height: 1.1;
+    }
+    .logo-subtitle {
+        color: #6b7280;
+        font-size: 0.95rem;
+    }
     .small-muted {
         font-size: 0.85rem;
         color: #6b7280;
@@ -311,14 +331,55 @@ st.markdown(
         white-space: pre-wrap;
         overflow-wrap: break-word;
     }
+    .login-card {
+        max-width: 560px;
+        margin: 0 auto;
+        padding-top: 10px;
+    }
     div[data-testid="stMetricValue"] {
-        font-size: 1.25rem;
+        font-size: 1.2rem;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# Logo / top header
+header_left, header_right = st.columns([4, 1])
+with header_left:
+    st.markdown(
+        """
+        <div class="logo-wrap">
+            <div class="logo-badge">🗂️</div>
+            <div>
+                <div class="logo-title">Lets Do Eat</div>
+                <div class="logo-subtitle">Tasks, dashboard notes, and calendar routing in one place.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with header_right:
+    if st.session_state.user_email:
+        st.caption(f"Signed in as: {st.session_state.user_email}")
+        if st.button("Logout", use_container_width=True):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            clear_session()
+            st.rerun()
+
+if not st.session_state.user_email:
+    with st.container():
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        show_auth_screen()
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
+
+
+# Top add areas
 top_action_1, top_action_2 = st.columns(2)
 
 with top_action_1:
@@ -361,7 +422,7 @@ with top_action_2:
             placeholder="Reminder, thought, quick todo, idea...",
             height=120,
         )
-        if st.button("Save note", use_container_width=True):
+        if st.button("Save note", key="save_dash_note", use_container_width=True):
             if not note_content.strip():
                 st.warning("Please write something in the note.")
             else:
@@ -369,6 +430,8 @@ with top_action_2:
                 st.success("Note added.")
                 st.rerun()
 
+
+# Load data
 tasks = fetch_tasks()
 notes_data = fetch_notes()
 df = pd.DataFrame(tasks)
@@ -388,6 +451,7 @@ if not df.empty:
 else:
     today = date.today()
 
+# Metrics
 if not df.empty:
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Total", int(len(df)))
@@ -399,6 +463,7 @@ if not df.empty:
 else:
     st.info("No tasks yet. Add your first task above.")
 
+# Dashboard notes at top only
 st.subheader("Dashboard Notes")
 
 if not notes_data:
@@ -418,6 +483,7 @@ else:
 
 st.divider()
 
+# Tasks section
 filtered_df = df.copy() if not df.empty else pd.DataFrame()
 
 if not df.empty:
