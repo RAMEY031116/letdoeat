@@ -5,6 +5,7 @@ import textwrap
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -20,16 +21,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ----------------------------
-# Style
-# ----------------------------
-style_file = BASE_DIR / "style.css"
-if style_file.exists():
-    st.markdown(f"<style>{style_file.read_text()}</style>", unsafe_allow_html=True)
+STYLE = BASE_DIR / "style.css"
+if STYLE.exists():
+    st.markdown(f"<style>{STYLE.read_text()}</style>", unsafe_allow_html=True)
 
-# ----------------------------
-# Secrets + Supabase
-# ----------------------------
+# =========================================================
+# Config / Supabase
+# =========================================================
+
 def secret(name: str, default=""):
     try:
         return st.secrets.get(name, default)
@@ -46,7 +45,7 @@ def get_supabase() -> Client:
         st.stop()
 
     if not url.startswith(("https://", "http://")):
-        st.error("SUPABASE_URL is not a valid URL. It must start with https://")
+        st.error("SUPABASE_URL must start with https://")
         st.stop()
 
     return create_client(url, key)
@@ -54,10 +53,20 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 AUTH_REQUIRED = str(secret("AUTH_REQUIRED", "false")).lower() == "true"
 PUBLIC_PROFILE_ID = str(secret("PUBLIC_PROFILE_ID", "")).strip()
+APP_TIMEZONE = str(secret("APP_TIMEZONE", "Europe/London")).strip() or "Europe/London"
 
-# ----------------------------
-# App state + auth
-# ----------------------------
+try:
+    TZ = ZoneInfo(APP_TIMEZONE)
+except Exception:
+    TZ = ZoneInfo("Europe/London")
+
+def now_local():
+    return datetime.now(TZ)
+
+# =========================================================
+# State / auth
+# =========================================================
+
 def init_state():
     defaults = {
         "access_token": None,
@@ -106,22 +115,21 @@ def current_user_id():
     return None
 
 def render_login():
-    st.markdown(
+    render_html(
         """
         <section class="login-hero">
           <div>
-            <div class="kicker on-dark">PERSONAL OPERATING SYSTEM</div>
+            <div class="kicker on-dark">YOUR PERSONAL OPERATING SYSTEM</div>
             <h1>LOCK IN<br><span>90</span></h1>
-            <p>Training, nutrition, focus, tasks and calendar — in one place.</p>
+            <p>Train, focus, build, organise and review — from one calm interface.</p>
           </div>
           <div class="login-orb">90</div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
+    left, right = st.columns(2, gap="large")
+    with left:
         st.markdown("### Log in")
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
@@ -135,7 +143,7 @@ def render_login():
             except Exception as exc:
                 st.error(f"Login failed: {exc}")
 
-    with c2:
+    with right:
         st.markdown("### Create account")
         email = st.text_input("Email ", key="signup_email")
         password = st.text_input("Password ", type="password", key="signup_password")
@@ -152,9 +160,20 @@ def render_login():
             except Exception as exc:
                 st.error(f"Sign up failed: {exc}")
 
-# ----------------------------
-# Database helpers
-# ----------------------------
+# =========================================================
+# HTML helpers
+# =========================================================
+
+def render_html(markup: str):
+    st.markdown(textwrap.dedent(markup).strip(), unsafe_allow_html=True)
+
+def safe(value):
+    return html.escape("" if value is None else str(value))
+
+# =========================================================
+# Database
+# =========================================================
+
 def first_row(table, filters):
     query = supabase.table(table).select("*")
     for key, value in filters.items():
@@ -175,11 +194,11 @@ def get_program(user_id):
     return response.data[0] if response.data else None
 
 def create_program(user_id, values):
-    start_date = values["start_date"]
+    start = values["start_date"]
     payload = {
         "user_id": user_id,
-        "start_date": str(start_date),
-        "end_date": str(start_date + timedelta(days=89)),
+        "start_date": str(start),
+        "end_date": str(start + timedelta(days=89)),
         "goal": values["goal"].strip(),
         "status": "active",
         "calorie_target": int(values["calorie_target"]),
@@ -294,39 +313,56 @@ def get_focus_sessions(user_id):
     )
     return response.data or []
 
-def get_notes(user_id):
+def get_inbox(user_id):
     response = (
-        supabase.table("lockin_notes")
+        supabase.table("lockin_inbox")
         .select("*")
         .eq("user_id", user_id)
         .order("created_at", desc=True)
-        .limit(50)
+        .limit(100)
         .execute()
     )
     return response.data or []
 
-# ----------------------------
-# Calendar
-# ----------------------------
+def add_inbox(user_id, content, category):
+    supabase.table("lockin_inbox").insert(
+        {
+            "user_id": user_id,
+            "content": content.strip(),
+            "category": category,
+            "status": "open",
+        }
+    ).execute()
+
+def get_weekly_reviews(user_id):
+    response = (
+        supabase.table("weekly_reviews")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("week_start", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+# =========================================================
+# Calendar helpers
+# =========================================================
+
 def task_start(task):
     task_date = datetime.strptime(str(task["task_date"]), "%Y-%m-%d").date()
-
     if task.get("task_time"):
         raw = str(task["task_time"])
-        raw = raw[:8]
         try:
-            task_time = datetime.strptime(raw, "%H:%M:%S").time()
+            task_time = datetime.strptime(raw[:8], "%H:%M:%S").time()
         except ValueError:
             task_time = datetime.strptime(raw[:5], "%H:%M").time()
     else:
         task_time = time(9, 0)
-
     return datetime.combine(task_date, task_time)
 
 def google_calendar_url(task):
     start = task_start(task)
     end = start + timedelta(hours=1)
-
     return (
         "https://calendar.google.com/calendar/render?action=TEMPLATE"
         f"&text={quote(task['title'])}"
@@ -337,7 +373,6 @@ def google_calendar_url(task):
 def outlook_calendar_url(task):
     start = task_start(task)
     end = start + timedelta(hours=1)
-
     return (
         "https://outlook.office.com/calendar/0/deeplink/compose?path=/calendar/action/compose"
         f"&subject={quote(task['title'])}"
@@ -351,7 +386,6 @@ def task_ics(task):
     end = start + timedelta(hours=1)
     title = (task["title"] or "").replace("\n", " ")
     notes = (task.get("notes") or "").replace("\n", "\\n")
-
     return f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//LOCK IN 90//EN
@@ -364,11 +398,12 @@ END:VEVENT
 END:VCALENDAR
 """
 
-# ----------------------------
-# Score logic
-# ----------------------------
+# =========================================================
+# Scoring / logic
+# =========================================================
+
 def target(program, key, default):
-    value = program.get(key)
+    value = program.get(key) if program else None
     return int(value) if value is not None else default
 
 def score_log(log, program):
@@ -392,194 +427,321 @@ def score_log(log, program):
 
 def current_streak(logs, program):
     lookup = {date.fromisoformat(row["log_date"]): row for row in logs}
-    check_date = date.today()
+    d = now_local().date()
     value = 0
-
-    while check_date in lookup:
-        completed, total = score_log(lookup[check_date], program)
-        if completed / total < 0.80:
+    while d in lookup:
+        done, total = score_log(lookup[d], program)
+        if done / total < 0.80:
             break
         value += 1
-        check_date -= timedelta(days=1)
-
+        d -= timedelta(days=1)
     return value
 
-# ----------------------------
-# Safe HTML rendering
-# ----------------------------
-def render_html(markup: str):
-    """Render custom HTML without Markdown treating indented lines as code."""
-    st.markdown(textwrap.dedent(markup).strip(), unsafe_allow_html=True)
+def next_action(today_log, program):
+    current = now_local().time()
 
+    actions = [
+        (time(8, 0), "Wake", "Start the day clean", bool(today_log.get("wake_by_8")), "Morning"),
+        (time(12, 0), "Lunch movement", "20–30 minutes", bool(today_log.get("lunch_cardio")), "Training"),
+        (time(17, 15), "Evening gym", "Your own session", bool(today_log.get("evening_training")), "Training"),
+        (time(18, 30), "Cook", "Make dinner", bool(today_log.get("cooked")), "Life"),
+        (time(19, 30), "Study", f"{target(program, 'study_target', 60)} minutes", int(today_log.get("study_minutes") or 0) >= target(program, "study_target", 60), "Focus"),
+        (time(20, 45), "Business", f"{target(program, 'business_target', 45)} minutes", int(today_log.get("business_minutes") or 0) >= target(program, "business_target", 45), "Focus"),
+        (time(21, 30), "Art", f"{target(program, 'art_target', 30)} minutes", int(today_log.get("art_minutes") or 0) >= target(program, "art_target", 30), "Focus"),
+        (time(22, 0), "Room reset", f"{target(program, 'room_target', 15)} minutes", bool(today_log.get("room_tidy")), "Reset"),
+        (time(23, 0), "Bed", "Protect tomorrow", bool(today_log.get("bed_by_23")), "Recovery"),
+    ]
 
-# ----------------------------
-# Display components
-# ----------------------------
+    # Prefer the first incomplete block whose scheduled time has arrived.
+    for scheduled, name, detail, completed, category in actions:
+        if scheduled <= current and not completed:
+            return name, detail, scheduled.strftime("%H:%M"), category
+
+    # Otherwise show the next upcoming incomplete block.
+    for scheduled, name, detail, completed, category in actions:
+        if not completed:
+            return name, detail, scheduled.strftime("%H:%M"), category
+
+    return "Day complete", "Everything planned is done", "✓", "Complete"
+
+def routine_rows(today_log, program):
+    return [
+        ("08:00", "Wake", "Morning", bool(today_log.get("wake_by_8"))),
+        ("09:00", "Work", "Work", now_local().time() >= time(17, 15)),
+        ("12:30", "Lunch movement", "Training", bool(today_log.get("lunch_cardio"))),
+        ("17:30", "Gym", "Training", bool(today_log.get("evening_training"))),
+        ("18:30", "Cook", "Life", bool(today_log.get("cooked"))),
+        ("19:30", "Study", "Focus", int(today_log.get("study_minutes") or 0) >= target(program, "study_target", 60)),
+        ("20:45", "Business", "Focus", int(today_log.get("business_minutes") or 0) >= target(program, "business_target", 45)),
+        ("21:30", "Art", "Focus", int(today_log.get("art_minutes") or 0) >= target(program, "art_target", 30)),
+        ("22:00", "Room reset", "Reset", bool(today_log.get("room_tidy"))),
+        ("23:00", "Sleep", "Recovery", bool(today_log.get("bed_by_23"))),
+    ]
+
+# =========================================================
+# Components
+# =========================================================
+
 def nav():
-    pages = ["Today", "Training", "Focus", "Tasks", "Progress"]
-    icons = {"Today": "⌂", "Training": "◫", "Focus": "◎", "Tasks": "✓", "Progress": "↗"}
-
-    st.markdown('<div class="nav-label">LOCK IN 90</div>', unsafe_allow_html=True)
-    columns = st.columns(5, gap="small")
-
-    for column, page in zip(columns, pages):
-        with column:
-            active = "active" if st.session_state.page == page else ""
+    pages = ["Today", "Focus", "Training", "Tasks", "Review"]
+    icons = {"Today": "⌂", "Focus": "◎", "Training": "◫", "Tasks": "✓", "Review": "↗"}
+    cols = st.columns(len(pages), gap="small")
+    for col, page in zip(cols, pages):
+        with col:
             if st.button(
                 f"{icons[page]}  {page}",
                 key=f"nav_{page}",
+                type="primary" if st.session_state.page == page else "secondary",
                 use_container_width=True,
-                type="primary" if active else "secondary",
             ):
                 st.session_state.page = page
                 st.rerun()
 
-def stat_cards(items):
+def stat_grid(items):
     cards = []
     for label, value, hint in items:
         cards.append(
             (
-                '<div class="stat-card">'
-                f'<div class="stat-label">{html.escape(str(label))}</div>'
-                f'<div class="stat-value">{html.escape(str(value))}</div>'
-                f'<div class="stat-hint">{html.escape(str(hint))}</div>'
-                '</div>'
-            )
-        )
-    render_html('<div class="stat-grid">' + "".join(cards) + '</div>')
-
-
-def focus_target_cards(program):
-    cards = [
-        ("STUDY", target(program, "study_target", 60), "Deep work"),
-        ("BUSINESS", target(program, "business_target", 45), "Build"),
-        ("ART", target(program, "art_target", 30), "Create"),
-        ("ROOM RESET", target(program, "room_target", 15), "Reset"),
-    ]
-
-    html_cards = []
-    for label, minutes, subtitle in cards:
-        html_cards.append(
-            (
-                '<article class="focus-target-card">'
-                '<div class="focus-target-top">'
-                f'<span class="focus-target-label">{html.escape(str(label))}</span>'
-                '<span class="focus-target-dot"></span>'
-                '</div>'
-                f'<div class="focus-target-number">{int(minutes)}<span> min</span></div>'
-                f'<div class="focus-target-sub">{html.escape(str(subtitle))}</div>'
+                '<article class="mini-stat">'
+                f'<div class="mini-stat-label">{safe(label)}</div>'
+                f'<div class="mini-stat-value">{safe(value)}</div>'
+                f'<div class="mini-stat-hint">{safe(hint)}</div>'
                 '</article>'
             )
         )
+    render_html('<section class="mini-stat-grid">' + "".join(cards) + '</section>')
 
-    render_html('<section class="focus-target-grid">' + "".join(html_cards) + '</section>')
-
-
-def focus_timer():
-    components.html(
+def command_card(name, detail, when, category):
+    render_html(
+        f"""
+        <section class="command-card">
+          <div class="command-top">
+            <div>
+              <div class="command-kicker">NO NEGOTIATION · NEXT ACTION</div>
+              <div class="command-title">{safe(name)}</div>
+              <div class="command-detail">{safe(detail)}</div>
+            </div>
+            <div class="command-time">{safe(when)}</div>
+          </div>
+          <div class="command-footer">
+            <span>{safe(category)}</span>
+            <strong>Do the next thing. Nothing else.</strong>
+          </div>
+        </section>
         """
-        <div id="lockin-timer">
+    )
+
+def timeline_component(rows):
+    pieces = []
+    for when, label, category, done in rows:
+        state = "done" if done else "pending"
+        icon = "✓" if done else "•"
+        pieces.append(
+            (
+                f'<div class="timeline-item {state}">'
+                f'<div class="timeline-time">{safe(when)}</div>'
+                f'<div class="timeline-rail"><span>{icon}</span></div>'
+                '<div class="timeline-copy">'
+                f'<strong>{safe(label)}</strong>'
+                f'<small>{safe(category)}</small>'
+                '</div>'
+                '</div>'
+            )
+        )
+    render_html('<section class="timeline-list">' + "".join(pieces) + '</section>')
+
+def focus_cards(program):
+    cards = [
+        ("STUDY", target(program, "study_target", 60), "Learn"),
+        ("BUSINESS", target(program, "business_target", 45), "Build"),
+        ("ART", target(program, "art_target", 30), "Create"),
+        ("ROOM", target(program, "room_target", 15), "Reset"),
+    ]
+    blocks = []
+    for label, mins, verb in cards:
+        blocks.append(
+            (
+                '<article class="focus-card">'
+                f'<div class="focus-card-label">{safe(label)}</div>'
+                f'<div class="focus-card-value">{mins}<span> min</span></div>'
+                f'<div class="focus-card-verb">{safe(verb)}</div>'
+                '</article>'
+            )
+        )
+    render_html('<section class="focus-card-grid">' + "".join(blocks) + '</section>')
+
+def focus_timer(program):
+    study = target(program, "study_target", 60)
+    business = target(program, "business_target", 45)
+    art = target(program, "art_target", 30)
+    room = target(program, "room_target", 15)
+
+    components.html(
+        f"""
+        <div id="timer-shell">
           <style>
-            *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-            body{margin:0;background:transparent;color:#111318}
-            .timer{border:1px solid rgba(17,19,24,.08);border-radius:24px;background:#fff;padding:20px;box-shadow:0 16px 38px rgba(17,19,24,.06)}
-            .top{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:16px}
-            .title{font-weight:850;font-size:18px}.sub{font-size:12px;color:#747b86;margin-top:3px}
-            .clock{font-size:42px;font-weight:900;letter-spacing:-1.6px}
-            .presets{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
-            button{border:0;border-radius:12px;padding:10px 8px;font-weight:750;cursor:pointer}
-            .preset{background:#f1f3f5;color:#111318}.preset:hover{background:#e7e9ed}
-            .actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-            .start{background:#111318;color:#fff}.pause,.reset{background:#f1f3f5;color:#111318}
-            @media(max-width:520px){.presets{grid-template-columns:repeat(2,1fr)}.clock{font-size:34px}}
+            *{{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+            body{{margin:0;background:transparent;color:#111318}}
+            .timer{{background:#101216;border-radius:26px;padding:22px;color:#fff;box-shadow:0 20px 50px rgba(15,17,20,.18)}}
+            .top{{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}}
+            .eyebrow{{font-size:11px;font-weight:900;letter-spacing:.14em;color:rgba(255,255,255,.45)}}
+            .mode{{font-size:20px;font-weight:850;margin-top:5px}}
+            .clock{{font-size:46px;line-height:1;font-weight:950;letter-spacing:-2px}}
+            .presets{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:20px}}
+            button{{border:0;border-radius:13px;padding:11px 8px;font-weight:800;cursor:pointer}}
+            .preset{{background:rgba(255,255,255,.08);color:#fff}}
+            .preset:hover{{background:rgba(255,255,255,.14)}}
+            .controls{{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:8px;margin-top:10px}}
+            .start{{background:#fff;color:#111318}}.secondary{{background:rgba(255,255,255,.08);color:#fff}}
+            .quote{{margin-top:17px;color:rgba(255,255,255,.46);font-size:12px}}
+            @media(max-width:560px){{
+              .presets{{grid-template-columns:repeat(2,1fr)}}
+              .clock{{font-size:38px}}
+              .timer{{padding:18px}}
+            }}
           </style>
           <div class="timer">
             <div class="top">
-              <div><div class="title">Focus timer</div><div class="sub" id="mode">Study · 60 minutes</div></div>
-              <div class="clock" id="clock">60:00</div>
+              <div>
+                <div class="eyebrow">FOCUS MODE</div>
+                <div class="mode" id="mode">Study · {study} minutes</div>
+              </div>
+              <div class="clock" id="clock">{study:02d}:00</div>
             </div>
             <div class="presets">
-              <button class="preset" onclick="setTimer(60,'Study')">Study 60</button>
-              <button class="preset" onclick="setTimer(45,'Business')">Business 45</button>
-              <button class="preset" onclick="setTimer(30,'Art')">Art 30</button>
-              <button class="preset" onclick="setTimer(15,'Room reset')">Room 15</button>
+              <button class="preset" onclick="setTimer({study},'Study')">Study {study}</button>
+              <button class="preset" onclick="setTimer({business},'Business')">Business {business}</button>
+              <button class="preset" onclick="setTimer({art},'Art')">Art {art}</button>
+              <button class="preset" onclick="setTimer({room},'Room reset')">Room {room}</button>
             </div>
-            <div class="actions">
-              <button class="start" onclick="startTimer()">Start</button>
-              <button class="pause" onclick="pauseTimer()">Pause</button>
-              <button class="reset" onclick="resetTimer()">Reset</button>
+            <div class="controls">
+              <button class="start" onclick="startTimer()">Start now</button>
+              <button class="secondary" onclick="pauseTimer()">Pause</button>
+              <button class="secondary" onclick="resetTimer()">Reset</button>
             </div>
+            <div class="quote">One block. One task. Finish before switching.</div>
           </div>
           <script>
-            let initial = 60*60;
-            let remaining = initial;
-            let handle = null;
-            function draw(){
+            let initial={study}*60;
+            let remaining=initial;
+            let timer=null;
+
+            function draw(){{
               const m=Math.floor(remaining/60).toString().padStart(2,'0');
               const s=(remaining%60).toString().padStart(2,'0');
               document.getElementById('clock').innerText=m+':'+s;
-            }
-            function setTimer(mins,label){
+            }}
+
+            function setTimer(mins,label){{
               pauseTimer();
-              initial=mins*60;remaining=initial;draw();
+              initial=mins*60;
+              remaining=initial;
               document.getElementById('mode').innerText=label+' · '+mins+' minutes';
-            }
-            function startTimer(){
-              if(handle) return;
-              handle=setInterval(()=>{
-                if(remaining>0){remaining--;draw();}
-                else{pauseTimer();document.getElementById('mode').innerText='Session complete ✓';}
-              },1000);
-            }
-            function pauseTimer(){if(handle){clearInterval(handle);handle=null;}}
-            function resetTimer(){pauseTimer();remaining=initial;draw();}
-            draw();
+              draw();
+            }}
+
+            function startTimer(){{
+              if(timer) return;
+              timer=setInterval(()=>{{
+                if(remaining>0){{remaining--;draw();}}
+                else{{
+                  pauseTimer();
+                  document.getElementById('mode').innerText='Block complete ✓';
+                }}
+              }},1000);
+            }}
+
+            function pauseTimer(){{
+              if(timer){{clearInterval(timer);timer=null;}}
+            }}
+
+            function resetTimer(){{
+              pauseTimer();
+              remaining=initial;
+              draw();
+            }}
           </script>
         </div>
         """,
-        height=215,
+        height=260,
         scrolling=False,
     )
 
-# ----------------------------
-# Today
-# ----------------------------
+def ninety_day_map(program, logs):
+    start = date.fromisoformat(program["start_date"])
+    by_date = {date.fromisoformat(row["log_date"]): row for row in logs}
+    today = now_local().date()
+    blocks = []
+
+    for i in range(90):
+        d = start + timedelta(days=i)
+        day_num = i + 1
+
+        if d > today:
+            cls = "future"
+            label = "Future"
+        elif d in by_date:
+            done, total = score_log(by_date[d], program)
+            pct = round(done / total * 100)
+            if pct >= 90:
+                cls = "excellent"
+            elif pct >= 75:
+                cls = "strong"
+            elif pct >= 50:
+                cls = "partial"
+            else:
+                cls = "low"
+            label = f"{pct}%"
+        else:
+            cls = "empty"
+            label = "No log"
+
+        today_cls = " today" if d == today else ""
+        blocks.append(
+            f'<div class="day-dot {cls}{today_cls}" title="Day {day_num} · {d.strftime("%d %b")} · {label}">{day_num}</div>'
+        )
+
+    render_html('<section class="day-map">' + "".join(blocks) + '</section>')
+
+# =========================================================
+# TODAY
+# =========================================================
+
 def render_today(user_id):
     program = get_program(user_id)
 
     if not program:
-        st.markdown(
+        render_html(
             """
-            <section class="page-hero">
-              <div class="hero-copy">
+            <section class="hero-main">
+              <div>
                 <div class="kicker on-dark">YOUR NEXT 90 DAYS</div>
                 <h1>BUILD THE<br><span>SYSTEM.</span></h1>
-                <p>Set the standards once. Then follow them every day.</p>
+                <p>Set the standards once. Then stop negotiating with yourself every day.</p>
               </div>
-              <div class="hero-ring"><strong>90</strong><small>DAYS</small></div>
+              <div class="hero-disc"><strong>90</strong><small>DAYS</small></div>
             </section>
-            """,
-            unsafe_allow_html=True,
+            """
         )
 
         with st.container(border=True):
-            st.markdown("### Set up your 90 days")
-            start_date = st.date_input("Day 1", value=date.today())
+            st.markdown("### Set up your programme")
+            start_date = st.date_input("Day 1", value=now_local().date())
             goal = st.text_area(
                 "Main goal",
                 placeholder="Build discipline, train consistently, study, build my business...",
             )
-            c1, c2 = st.columns(2)
-            with c1:
-                calorie_target = st.number_input("Daily calorie target", 1000, 6000, 2200, 50)
-                protein_target = st.number_input("Daily protein target (g)", 40, 350, 150, 5)
+            left, right = st.columns(2)
+            with left:
+                calorie_target = st.number_input("Daily calories", 1000, 6000, 2200, 50)
+                protein_target = st.number_input("Daily protein (g)", 40, 350, 150, 5)
                 wake_target = st.time_input("Wake target", value=time(8, 0))
                 bed_target = st.time_input("Bed target", value=time(23, 0))
-            with c2:
-                study_target = st.number_input("Study target (min)", 0, 300, 60, 5)
-                business_target = st.number_input("Business target (min)", 0, 300, 45, 5)
-                art_target = st.number_input("Art target (min)", 0, 300, 30, 5)
-                room_target = st.number_input("Room reset target (min)", 0, 120, 15, 5)
+            with right:
+                study_target = st.number_input("Study (min)", 0, 300, 60, 5)
+                business_target = st.number_input("Business (min)", 0, 300, 45, 5)
+                art_target = st.number_input("Art (min)", 0, 300, 30, 5)
+                room_target = st.number_input("Room reset (min)", 0, 120, 15, 5)
 
             if st.button("Start my 90 days", type="primary", use_container_width=True):
                 create_program(
@@ -600,438 +762,350 @@ def render_today(user_id):
                 st.rerun()
         return
 
-    start_date = date.fromisoformat(program["start_date"])
-    end_date = date.fromisoformat(program["end_date"])
-    raw_day = (date.today() - start_date).days + 1
-    display_day = max(1, min(90, raw_day))
-    progress_pct = max(0, min(100, round((raw_day / 90) * 100)))
+    today = now_local().date()
+    start = date.fromisoformat(program["start_date"])
+    end = date.fromisoformat(program["end_date"])
+    day_raw = (today - start).days + 1
+    day_num = max(1, min(90, day_raw))
+    programme_pct = max(0, min(100, round(day_raw / 90 * 100)))
 
-    today_log = get_daily_log(user_id, date.today()) or {}
+    log = get_daily_log(user_id, today) or {}
     logs = get_logs(user_id)
-    complete, total = score_log(today_log, program)
+    done, total = score_log(log, program)
+    day_pct = round(done / total * 100)
+    next_name, next_detail, next_time, next_category = next_action(log, program)
 
-    goal = html.escape(program.get("goal") or "Follow the plan. No daily negotiation.")
-
-    st.markdown(
+    render_html(
         f"""
-        <section class="page-hero">
-          <div class="hero-copy">
+        <section class="hero-main">
+          <div>
             <div class="kicker on-dark">LOCK IN 90</div>
-            <h1>DAY {display_day}<br><span>OF 90.</span></h1>
-            <p>{goal}</p>
+            <h1>DAY {day_num}<br><span>OF 90.</span></h1>
+            <p>{safe(program.get("goal") or "Follow the system. Keep moving.")}</p>
           </div>
-          <div class="hero-ring"><strong>{progress_pct}%</strong><small>COMPLETE</small></div>
+          <div class="hero-disc"><strong>{programme_pct}%</strong><small>JOURNEY</small></div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
-    st.progress(progress_pct / 100)
-
-    stat_cards(
+    stat_grid(
         [
-            ("STREAK", f"{current_streak(logs, program)} days", "80%+ keeps it alive"),
-            ("TODAY", f"{complete}/{total}", "daily standards"),
-            ("SLEEP", f"{float(today_log.get('sleep_hours') or 0):.1f} h", f"bed {str(program.get('bed_target') or '23:00')[:5]}"),
-            ("FINISH", end_date.strftime("%d %b"), "day 90"),
+            ("TODAY", f"{day_pct}%", f"{done}/{total} standards"),
+            ("STREAK", f"{current_streak(logs, program)} days", "80%+ keeps it"),
+            ("SLEEP", f"{float(log.get('sleep_hours') or 0):.1f}h", "recovery"),
+            ("FINISH", end.strftime("%d %b"), "day 90"),
         ]
     )
 
-    st.markdown('<div class="section-heading"><span>TODAY</span><h2>Daily standards</h2></div>', unsafe_allow_html=True)
+    command_card(next_name, next_detail, next_time, next_category)
 
-    with st.form("today_form"):
-        left, right = st.columns(2, gap="large")
+    left, right = st.columns([1.15, .85], gap="large")
 
-        with left:
-            wake = st.checkbox("Wake on time", value=bool(today_log.get("wake_by_8")))
-            cardio = st.checkbox("Lunch cardio / planned movement", value=bool(today_log.get("lunch_cardio")))
-            weights = st.checkbox("Weights / programmed recovery", value=bool(today_log.get("evening_training")))
-            cooked = st.checkbox("Cook / planned meal", value=bool(today_log.get("cooked")))
-            room = st.checkbox("Room reset completed", value=bool(today_log.get("room_tidy")))
-            bed = st.checkbox("Bed on time", value=bool(today_log.get("bed_by_23")))
+    with left:
+        st.markdown('<div class="section-head"><span>TODAY</span><h2>Your timeline</h2></div>', unsafe_allow_html=True)
+        timeline_component(routine_rows(log, program))
 
-        with right:
-            calories = st.number_input(
-                "Calories eaten",
-                0,
-                10000,
-                int(today_log.get("calories_actual") or 0),
-                50,
-            )
-            protein_g = st.number_input(
-                "Protein (g)",
-                0,
-                500,
-                int(today_log.get("protein_actual") or 0),
-                5,
-            )
-            cal_hit = st.checkbox(
-                f"Calories on target ({target(program, 'calorie_target', 2200)})",
-                value=bool(today_log.get("calorie_target_hit")),
-            )
-            protein_hit = st.checkbox(
-                f"Protein on target ({target(program, 'protein_target', 150)}g)",
-                value=bool(today_log.get("protein_target_hit")),
-            )
-            study = st.number_input(
-                "Study minutes",
-                0,
-                600,
-                int(today_log.get("study_minutes") or 0),
-                5,
-            )
-            business = st.number_input(
-                "Business minutes",
-                0,
-                600,
-                int(today_log.get("business_minutes") or 0),
-                5,
-            )
-            art = st.number_input(
-                "Art minutes",
-                0,
-                600,
-                int(today_log.get("art_minutes") or 0),
-                5,
-            )
-            sleep_hours = st.number_input(
-                "Sleep hours",
-                0.0,
-                14.0,
-                float(today_log.get("sleep_hours") or 0.0),
-                0.25,
+    with right:
+        st.markdown('<div class="section-head"><span>QUICK CHECK-IN</span><h2>Log the day</h2></div>', unsafe_allow_html=True)
+
+        with st.form("quick_today_form"):
+            wake = st.checkbox("Wake on time", value=bool(log.get("wake_by_8")))
+            cardio = st.checkbox("Lunch movement", value=bool(log.get("lunch_cardio")))
+            training = st.checkbox("Evening training / recovery", value=bool(log.get("evening_training")))
+            cooked = st.checkbox("Cooked / planned meal", value=bool(log.get("cooked")))
+            room = st.checkbox("Room reset", value=bool(log.get("room_tidy")))
+            bed = st.checkbox("Bed on time", value=bool(log.get("bed_by_23")))
+
+            study = st.number_input("Study minutes", 0, 600, int(log.get("study_minutes") or 0), 5)
+            business = st.number_input("Business minutes", 0, 600, int(log.get("business_minutes") or 0), 5)
+            art = st.number_input("Art minutes", 0, 600, int(log.get("art_minutes") or 0), 5)
+            calories_actual = st.number_input("Calories", 0, 10000, int(log.get("calories_actual") or 0), 50)
+            protein_actual = st.number_input("Protein (g)", 0, 500, int(log.get("protein_actual") or 0), 5)
+            sleep_hours = st.number_input("Sleep hours", 0.0, 14.0, float(log.get("sleep_hours") or 0.0), 0.25)
+
+            cal_hit = calories_actual > 0 and abs(calories_actual - target(program, "calorie_target", 2200)) <= max(150, int(target(program, "calorie_target", 2200) * .08))
+            protein_hit = protein_actual >= target(program, "protein_target", 150)
+
+            notes = st.text_area(
+                "Quick note",
+                value=log.get("notes") or "",
+                placeholder="One line is enough.",
             )
 
-        notes = st.text_area(
-            "Day note",
-            value=today_log.get("notes") or "",
-            placeholder="What worked? What needs adjusting tomorrow?",
-        )
-
-        if st.form_submit_button("Save today", type="primary", use_container_width=True):
-            save_daily_log(
-                user_id,
-                date.today(),
-                {
-                    "wake_by_8": wake,
-                    "lunch_cardio": cardio,
-                    "evening_training": weights,
-                    "cooked": cooked,
-                    "calorie_target_hit": cal_hit,
-                    "protein_target_hit": protein_hit,
-                    "calories_actual": calories,
-                    "protein_actual": protein_g,
-                    "study_minutes": study,
-                    "business_minutes": business,
-                    "art_minutes": art,
-                    "room_tidy": room,
-                    "bed_by_23": bed,
-                    "sleep_hours": sleep_hours,
-                    "notes": notes.strip(),
-                },
-            )
-            st.success("Today saved.")
-            st.rerun()
-
-    st.markdown('<div class="section-heading"><span>WEEKDAY</span><h2>Your rhythm</h2></div>', unsafe_allow_html=True)
-
-    rhythm = [
-        ("08:00", "Wake", "Breakfast + get ready"),
-        ("09:00", "Work", "Start work"),
-        ("Lunch", "Cardio", "20–30 min, mostly moderate"),
-        ("17:15", "Finish work", "Move into training"),
-        ("After work", "Weights", "4 programmed strength days"),
-        ("18:30", "Home + cook", "Around 45 minutes"),
-        ("19:30", "Study", f"{target(program, 'study_target', 60)} minutes"),
-        ("20:45", "Business", f"{target(program, 'business_target', 45)} minutes"),
-        ("21:30", "Art", f"{target(program, 'art_target', 30)} minutes"),
-        ("22:00", "Room reset", f"{target(program, 'room_target', 15)} minutes"),
-        ("23:00", "Bed", "Protect recovery"),
-    ]
-
-    rows = []
-    for when, title, detail in rhythm:
-        rows.append(
-            (
-                '<div class="rhythm-row">'
-                f'<div class="rhythm-time">{html.escape(str(when))}</div>'
-                '<div>'
-                f'<strong>{html.escape(str(title))}</strong>'
-                f'<span>{html.escape(str(detail))}</span>'
-                '</div>'
-                '</div>'
-            )
-        )
-
-    render_html('<div class="rhythm-card">' + "".join(rows) + '</div>')
-
-    with st.expander("Edit my targets"):
-        c1, c2 = st.columns(2)
-        with c1:
-            edit_goal = st.text_area("Goal", value=program.get("goal") or "")
-            edit_cal = st.number_input("Calories target", 1000, 6000, target(program, "calorie_target", 2200), 50)
-            edit_pro = st.number_input("Protein target (g)", 40, 350, target(program, "protein_target", 150), 5)
-            edit_wake = st.time_input(
-                "Wake target",
-                value=datetime.strptime(str(program.get("wake_target") or "08:00:00")[:8], "%H:%M:%S").time(),
-            )
-        with c2:
-            edit_study = st.number_input("Study target", 0, 300, target(program, "study_target", 60), 5)
-            edit_business = st.number_input("Business target", 0, 300, target(program, "business_target", 45), 5)
-            edit_art = st.number_input("Art target", 0, 300, target(program, "art_target", 30), 5)
-            edit_room = st.number_input("Room target", 0, 120, target(program, "room_target", 15), 5)
-            edit_bed = st.time_input(
-                "Bed target",
-                value=datetime.strptime(str(program.get("bed_target") or "23:00:00")[:8], "%H:%M:%S").time(),
-            )
-
-        if st.button("Save targets", use_container_width=True):
-            update_program(
-                user_id,
-                program["id"],
-                {
-                    "goal": edit_goal,
-                    "calorie_target": edit_cal,
-                    "protein_target": edit_pro,
-                    "study_target": edit_study,
-                    "business_target": edit_business,
-                    "art_target": edit_art,
-                    "room_target": edit_room,
-                    "wake_target": edit_wake,
-                    "bed_target": edit_bed,
-                },
-            )
-            st.success("Targets updated.")
-            st.rerun()
-
-# ----------------------------
-# Training
-# ----------------------------
-def render_training(user_id):
-    render_html(
-        """
-        <section class="image-hero training-hero">
-          <div>
-            <div class="kicker on-dark">TRAINING</div>
-            <h1>YOUR TRAINING.<br>YOUR CHOICE.</h1>
-            <p>The app keeps the structure simple. You decide what workout you actually do.</p>
-          </div>
-        </section>
-        """
-    )
-
-    st.markdown(
-        '<div class="section-heading"><span>THE SIMPLE SYSTEM</span><h2>Two sessions, different jobs</h2></div>',
-        unsafe_allow_html=True,
-    )
-
-    render_html(
-        """
-        <section class="training-simple-grid">
-          <article class="training-simple-card">
-            <div class="training-simple-icon">☀</div>
-            <div class="training-simple-kicker">LUNCH</div>
-            <div class="training-simple-title">Move</div>
-            <div class="training-simple-copy">
-              Cardio, walking or light movement. Keep it short enough that you can return to work feeling good.
-            </div>
-            <div class="training-simple-time">20–30 min</div>
-          </article>
-
-          <article class="training-simple-card training-simple-card-dark">
-            <div class="training-simple-icon">◫</div>
-            <div class="training-simple-kicker">AFTER WORK</div>
-            <div class="training-simple-title">Train</div>
-            <div class="training-simple-copy">
-              Do your own gym workout. The app does not choose your exercises or split for you.
-            </div>
-            <div class="training-simple-time">Your session</div>
-          </article>
-
-          <article class="training-simple-card">
-            <div class="training-simple-icon">↺</div>
-            <div class="training-simple-kicker">WHEN NEEDED</div>
-            <div class="training-simple-title">Recover</div>
-            <div class="training-simple-copy">
-              Rest, walk, stretch or skip the second session when recovery is the better choice.
-            </div>
-            <div class="training-simple-time">Part of the plan</div>
-          </article>
-        </section>
-        """
-    )
-
-    st.markdown(
-        '<div class="section-heading"><span>TODAY</span><h2>Quick training log</h2></div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Only log what is useful. No sets, reps or exercise tracking unless you decide you want that later.")
-
-    with st.form("workout_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            workout_date = st.date_input("Date", value=date.today(), key="workout_date")
-            session = st.selectbox(
-                "What did you do?",
-                [
-                    "Lunch cardio / movement",
-                    "Evening gym",
-                    "Both",
-                    "Recovery / rest",
-                    "Other",
-                ],
-            )
-        with c2:
-            duration = st.number_input("Total minutes", 0, 300, 30, 5)
-            effort = st.select_slider(
-                "How did it feel?",
-                options=["Easy", "Good", "Hard", "Very hard"],
-                value="Good",
-            )
-
-        notes = st.text_area(
-            "Optional note",
-            placeholder="Example: good session, legs tired, treadmill + gym, rest day...",
-        )
-
-        if st.form_submit_button("Save training", type="primary", use_container_width=True):
-            supabase.table("workouts").insert(
-                {
-                    "user_id": user_id,
-                    "workout_date": str(workout_date),
-                    "session": session,
-                    "exercise": "",
-                    "sets": 0,
-                    "reps": 0,
-                    "weight": 0,
-                    "duration_minutes": duration,
-                    "notes": f"{effort}" + (f" — {notes.strip()}" if notes.strip() else ""),
-                }
-            ).execute()
-            st.success("Training saved.")
-            st.rerun()
-
-    workouts = get_workouts(user_id)
-    if workouts:
-        st.markdown(
-            '<div class="section-heading"><span>RECENT</span><h2>Your sessions</h2></div>',
-            unsafe_allow_html=True,
-        )
-
-        recent = workouts[:8]
-        cards = []
-        for row in recent:
-            raw_note = row.get("notes") or ""
-            cards.append(
-                (
-                    '<div class="training-history-card">'
-                    f'<div class="training-history-date">{html.escape(str(row.get("workout_date", "")))}</div>'
-                    f'<div class="training-history-title">{html.escape(str(row.get("session", "Training")))}</div>'
-                    f'<div class="training-history-meta">{int(row.get("duration_minutes") or 0)} min'
-                    + (f' · {html.escape(raw_note)}' if raw_note else '')
-                    + '</div>'
-                    '</div>'
+            if st.form_submit_button("Save today", type="primary", use_container_width=True):
+                save_daily_log(
+                    user_id,
+                    today,
+                    {
+                        "wake_by_8": wake,
+                        "lunch_cardio": cardio,
+                        "evening_training": training,
+                        "cooked": cooked,
+                        "calorie_target_hit": cal_hit,
+                        "protein_target_hit": protein_hit,
+                        "calories_actual": calories_actual,
+                        "protein_actual": protein_actual,
+                        "study_minutes": study,
+                        "business_minutes": business,
+                        "art_minutes": art,
+                        "room_tidy": room,
+                        "bed_by_23": bed,
+                        "sleep_hours": sleep_hours,
+                        "notes": notes.strip(),
+                    },
                 )
+                st.success("Day saved.")
+                st.rerun()
+
+    st.markdown('<div class="section-head"><span>INBOX</span><h2>Brain dump</h2></div>', unsafe_allow_html=True)
+    st.caption("Get it out of your head. Decide what it is later.")
+
+    with st.form("brain_dump_form"):
+        c1, c2 = st.columns([4, 1])
+        with c1:
+            brain = st.text_input(
+                "Brain dump",
+                placeholder="Idea, thing to buy, study topic, business thought, reminder...",
+                label_visibility="collapsed",
             )
+        with c2:
+            brain_category = st.selectbox(
+                "Category",
+                ["General", "Study", "Business", "Personal", "Idea"],
+                label_visibility="collapsed",
+            )
+        if st.form_submit_button("Capture", use_container_width=True):
+            if brain.strip():
+                add_inbox(user_id, brain, brain_category)
+                st.rerun()
 
-        render_html('<div class="training-history-grid">' + "".join(cards) + '</div>')
+    inbox = [x for x in get_inbox(user_id) if x.get("status") == "open"][:6]
+    if inbox:
+        chips = []
+        for item in inbox:
+            chips.append(
+                f'<div class="inbox-chip"><span>{safe(item.get("category"))}</span>{safe(item.get("content"))}</div>'
+            )
+        render_html('<section class="inbox-grid">' + "".join(chips) + '</section>')
 
+# =========================================================
+# FOCUS
+# =========================================================
 
-# ----------------------------
-# Focus
-# ----------------------------
 def render_focus(user_id):
     program = get_program(user_id)
-
     if not program:
-        st.info("Start your 90-day programme on the Today page first.")
+        st.info("Start the programme on Today first.")
         return
 
     render_html(
         """
-        <section class="image-hero focus-hero">
-          <div>
-            <div class="kicker on-dark">AFTER WORK</div>
-            <h1>STUDY FIRST.<br>THEN BUILD.</h1>
-            <p>One evening, four clear blocks. No guessing what comes next.</p>
-          </div>
+        <section class="sub-hero focus-bg">
+          <div class="kicker on-dark">FOCUS MODE</div>
+          <h1>ONE THING.<br>UNTIL IT'S DONE.</h1>
+          <p>Study, business, art and your room reset — without turning the evening into a complicated system.</p>
         </section>
         """
     )
 
-    # IMPORTANT:
-    # These are custom HTML cards, NOT st.metric().
-    # This avoids the Streamlit theme bug that made the values white.
-    focus_target_cards(program)
+    focus_cards(program)
 
-    st.markdown('<div class="section-heading"><span>TIMER</span><h2>Run the block</h2></div>', unsafe_allow_html=True)
-    focus_timer()
+    log = get_daily_log(user_id, now_local().date()) or {}
+    name, detail, when, category = next_action(log, program)
+    if category == "Focus" or name == "Room reset":
+        command_card(name, detail, when, category)
 
-    st.markdown('<div class="section-heading"><span>LOG</span><h2>Record what you did</h2></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-head"><span>TIMER</span><h2>Start the block</h2></div>', unsafe_allow_html=True)
+    focus_timer(program)
 
-    with st.form("focus_form"):
-        c1, c2 = st.columns([1, 1])
+    st.markdown('<div class="section-head"><span>LOG</span><h2>Finished a block?</h2></div>', unsafe_allow_html=True)
+    with st.form("focus_log_form"):
+        c1, c2 = st.columns(2)
         with c1:
-            focus_type = st.selectbox("Focus type", ["Study", "Business", "Art", "Room reset"])
+            kind = st.selectbox("Type", ["Study", "Business", "Art", "Room reset"])
         with c2:
-            minutes = st.number_input("Minutes completed", 0, 300, 30, 5)
+            minutes = st.number_input("Minutes", 0, 300, 30, 5)
         note = st.text_input("Optional note")
 
         if st.form_submit_button("Save focus block", type="primary", use_container_width=True):
             supabase.table("focus_sessions").insert(
                 {
                     "user_id": user_id,
-                    "session_date": str(date.today()),
-                    "focus_type": focus_type,
+                    "session_date": str(now_local().date()),
+                    "focus_type": kind,
                     "minutes": minutes,
                     "note": note.strip(),
                 }
             ).execute()
-            st.success("Focus block saved.")
+
+            # Also update today's daily totals.
+            today_log = get_daily_log(user_id, now_local().date()) or {}
+            values = {
+                "wake_by_8": bool(today_log.get("wake_by_8")),
+                "lunch_cardio": bool(today_log.get("lunch_cardio")),
+                "evening_training": bool(today_log.get("evening_training")),
+                "cooked": bool(today_log.get("cooked")),
+                "calorie_target_hit": bool(today_log.get("calorie_target_hit")),
+                "protein_target_hit": bool(today_log.get("protein_target_hit")),
+                "calories_actual": int(today_log.get("calories_actual") or 0),
+                "protein_actual": int(today_log.get("protein_actual") or 0),
+                "study_minutes": int(today_log.get("study_minutes") or 0),
+                "business_minutes": int(today_log.get("business_minutes") or 0),
+                "art_minutes": int(today_log.get("art_minutes") or 0),
+                "room_tidy": bool(today_log.get("room_tidy")),
+                "bed_by_23": bool(today_log.get("bed_by_23")),
+                "sleep_hours": float(today_log.get("sleep_hours") or 0),
+                "notes": today_log.get("notes") or "",
+            }
+
+            if kind == "Study":
+                values["study_minutes"] += minutes
+            elif kind == "Business":
+                values["business_minutes"] += minutes
+            elif kind == "Art":
+                values["art_minutes"] += minutes
+            elif kind == "Room reset":
+                values["room_tidy"] = True
+
+            save_daily_log(user_id, now_local().date(), values)
+            st.success("Block logged.")
             st.rerun()
 
-    sessions = get_focus_sessions(user_id)
+    sessions = get_focus_sessions(user_id)[:8]
     if sessions:
-        df = pd.DataFrame(sessions)
-        columns = [c for c in ["session_date", "focus_type", "minutes", "note"] if c in df.columns]
-        st.dataframe(df[columns], use_container_width=True, hide_index=True)
+        blocks = []
+        for s in sessions:
+            blocks.append(
+                (
+                    '<div class="history-row">'
+                    f'<div><strong>{safe(s.get("focus_type"))}</strong><span>{safe(s.get("session_date"))}</span></div>'
+                    f'<b>{int(s.get("minutes") or 0)} min</b>'
+                    '</div>'
+                )
+            )
+        render_html('<section class="history-list">' + "".join(blocks) + '</section>')
 
-# ----------------------------
-# Tasks + Calendar
-# ----------------------------
+# =========================================================
+# TRAINING
+# =========================================================
+
+def render_training(user_id):
+    render_html(
+        """
+        <section class="sub-hero training-bg">
+          <div class="kicker on-dark">TRAINING</div>
+          <h1>MOVE.<br>TRAIN. RECOVER.</h1>
+          <p>The app gives you structure, not a workout you never asked for.</p>
+        </section>
+        """
+    )
+
+    render_html(
+        """
+        <section class="training-grid">
+          <article class="training-card">
+            <div class="training-tag">LUNCH</div>
+            <h3>Move</h3>
+            <p>Cardio, walking or light movement. Keep it short and sustainable.</p>
+            <strong>20–30 min</strong>
+          </article>
+          <article class="training-card dark">
+            <div class="training-tag">AFTER WORK</div>
+            <h3>Train</h3>
+            <p>Your own gym session. You choose the workout, exercises and intensity.</p>
+            <strong>Your session</strong>
+          </article>
+          <article class="training-card">
+            <div class="training-tag">RECOVERY</div>
+            <h3>Recover</h3>
+            <p>Rest, walk or stretch when recovery is the better choice.</p>
+            <strong>Still locked in</strong>
+          </article>
+        </section>
+        """
+    )
+
+    st.markdown('<div class="section-head"><span>QUICK LOG</span><h2>Training today</h2></div>', unsafe_allow_html=True)
+
+    with st.form("training_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            training_date = st.date_input("Date", value=now_local().date(), key="training_date")
+            session = st.selectbox(
+                "What did you do?",
+                ["Lunch movement", "Evening gym", "Both", "Recovery / rest", "Other"],
+            )
+        with c2:
+            duration = st.number_input("Total minutes", 0, 300, 30, 5)
+            effort = st.select_slider("How did it feel?", ["Easy", "Good", "Hard", "Very hard"], value="Good")
+
+        note = st.text_area("Optional note", placeholder="Keep it short.")
+
+        if st.form_submit_button("Save training", type="primary", use_container_width=True):
+            supabase.table("workouts").insert(
+                {
+                    "user_id": user_id,
+                    "workout_date": str(training_date),
+                    "session": session,
+                    "exercise": "",
+                    "sets": 0,
+                    "reps": 0,
+                    "weight": 0,
+                    "duration_minutes": duration,
+                    "notes": effort + (f" — {note.strip()}" if note.strip() else ""),
+                }
+            ).execute()
+            st.success("Training saved.")
+            st.rerun()
+
+    workouts = get_workouts(user_id)[:8]
+    if workouts:
+        st.markdown('<div class="section-head"><span>RECENT</span><h2>Your training</h2></div>', unsafe_allow_html=True)
+        blocks = []
+        for row in workouts:
+            blocks.append(
+                (
+                    '<div class="history-row">'
+                    '<div>'
+                    f'<strong>{safe(row.get("session"))}</strong>'
+                    f'<span>{safe(row.get("workout_date"))} · {safe(row.get("notes") or "")}</span>'
+                    '</div>'
+                    f'<b>{int(row.get("duration_minutes") or 0)} min</b>'
+                    '</div>'
+                )
+            )
+        render_html('<section class="history-list">' + "".join(blocks) + '</section>')
+
+# =========================================================
+# TASKS
+# =========================================================
+
 def render_tasks(user_id):
     render_html(
         """
-        <section class="image-hero tasks-hero">
-          <div>
-            <div class="kicker on-dark">TASKS + CALENDAR</div>
-            <h1>PLAN IT ONCE.<br>PUT IT WHERE YOU USE IT.</h1>
-            <p>Create tasks here, then push them into Google, Outlook or Apple Calendar.</p>
-          </div>
+        <section class="sub-hero tasks-bg">
+          <div class="kicker on-dark">TASKS + CALENDAR</div>
+          <h1>PLAN IT ONCE.<br>PUT IT WHERE YOU USE IT.</h1>
+          <p>Keep your task system simple and send important blocks straight to your calendar.</p>
         </section>
         """
     )
 
     with st.expander("＋ Add a task", expanded=True):
         with st.form("task_form"):
-            c1, c2 = st.columns([1.4, 1])
-            with c1:
+            left, right = st.columns([1.4, 1])
+            with left:
                 title = st.text_input("Task title")
                 task_notes = st.text_area("Notes")
-            with c2:
+            with right:
                 priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
-                task_date = st.date_input("Date", value=date.today())
+                task_date = st.date_input("Date", value=now_local().date())
                 use_time = st.checkbox("Add time")
                 task_time = st.time_input("Time", value=time(9, 0), disabled=not use_time)
-                category = st.selectbox(
-                    "Category",
-                    ["Personal", "Work", "Study", "Business", "Gym", "Other"],
-                )
+                category = st.selectbox("Category", ["Personal", "Work", "Study", "Business", "Gym", "Other"])
 
             if st.form_submit_button("Save task", type="primary", use_container_width=True):
-                if not title.strip():
-                    st.warning("Give the task a title.")
-                else:
+                if title.strip():
                     add_task(
                         user_id,
                         title,
@@ -1041,184 +1115,259 @@ def render_tasks(user_id):
                         task_time if use_time else None,
                         category,
                     )
-                    st.success("Task saved.")
                     st.rerun()
 
     tasks = get_tasks(user_id)
+    search = st.text_input("Search", placeholder="Search tasks...")
+    show_done = st.checkbox("Show completed", value=False)
 
-    if not tasks:
-        st.info("No tasks yet.")
-    else:
-        search = st.text_input("Search tasks", placeholder="Gym, study, work...")
-        show_completed = st.checkbox("Show completed", value=False)
+    filtered = tasks
+    if search.strip():
+        needle = search.lower().strip()
+        filtered = [
+            t for t in filtered
+            if needle in (t.get("title") or "").lower()
+            or needle in (t.get("notes") or "").lower()
+        ]
+    if not show_done:
+        filtered = [t for t in filtered if not t.get("completed")]
 
-        filtered = tasks
-        if search.strip():
-            needle = search.lower().strip()
-            filtered = [
-                task
-                for task in filtered
-                if needle in (task.get("title") or "").lower()
-                or needle in (task.get("notes") or "").lower()
-            ]
+    for task in filtered[:30]:
+        task_time_text = f" · {str(task['task_time'])[:5]}" if task.get("task_time") else ""
+        render_html(
+            f"""
+            <article class="task-card">
+              <div class="task-meta">{safe(task.get("priority"))} · {safe(task.get("category"))} · {safe(task.get("task_date"))}{safe(task_time_text)}</div>
+              <div class="task-name">{'✓ ' if task.get('completed') else ''}{safe(task.get("title"))}</div>
+              <div class="task-note">{safe(task.get("notes") or "")}</div>
+            </article>
+            """
+        )
 
-        if not show_completed:
-            filtered = [task for task in filtered if not task.get("completed")]
-
-        for task in filtered:
-            task_title = html.escape(task["title"])
-            task_notes = html.escape(task.get("notes") or "")
-            task_time_text = f" · {str(task['task_time'])[:5]}" if task.get("task_time") else ""
-
-            task_html = (
-                '<div class="task-card">'
-                f'<div class="task-meta">{html.escape(task["priority"])} · {html.escape(task["category"])} · {task["task_date"]}{task_time_text}</div>'
-                f'<div class="task-title">{"✓ " if task.get("completed") else ""}{task_title}</div>'
-                + (f'<div class="task-note">{task_notes}</div>' if task_notes else '')
-                + '</div>'
-            )
-            render_html(task_html)
-
-            action1, action2 = st.columns(2)
-            with action1:
-                if st.button(
-                    "Undo" if task.get("completed") else "Mark done",
-                    key=f"done_{task['id']}",
-                    use_container_width=True,
-                ):
-                    (
-                        supabase.table("lockin_tasks")
-                        .update({"completed": not task.get("completed")})
-                        .eq("id", task["id"])
-                        .eq("user_id", user_id)
-                        .execute()
-                    )
-                    st.rerun()
-            with action2:
-                if st.button("Delete", key=f"delete_{task['id']}", use_container_width=True):
-                    (
-                        supabase.table("lockin_tasks")
-                        .delete()
-                        .eq("id", task["id"])
-                        .eq("user_id", user_id)
-                        .execute()
-                    )
-                    st.rerun()
-
-            cal1, cal2, cal3 = st.columns(3)
-            with cal1:
-                st.link_button("Google Calendar", google_calendar_url(task), use_container_width=True)
-            with cal2:
-                st.link_button("Outlook", outlook_calendar_url(task), use_container_width=True)
-            with cal3:
-                st.download_button(
-                    "Apple / ICS",
-                    task_ics(task),
-                    file_name=f"{task['title'].replace(' ', '_')}.ics",
-                    mime="text/calendar",
-                    use_container_width=True,
-                    key=f"ics_{task['id']}",
+        a, b = st.columns(2)
+        with a:
+            if st.button("Undo" if task.get("completed") else "Done", key=f"done_{task['id']}", use_container_width=True):
+                (
+                    supabase.table("lockin_tasks")
+                    .update({"completed": not task.get("completed")})
+                    .eq("id", task["id"])
+                    .eq("user_id", user_id)
+                    .execute()
                 )
-
-            st.markdown("<div class='task-gap'></div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="section-heading"><span>NOTES</span><h2>Quick capture</h2></div>', unsafe_allow_html=True)
-    with st.form("note_form"):
-        note = st.text_area("Quick note", placeholder="Idea, reminder, thought...")
-        if st.form_submit_button("Save note", use_container_width=True):
-            if note.strip():
-                supabase.table("lockin_notes").insert(
-                    {
-                        "user_id": user_id,
-                        "content": note.strip(),
-                    }
-                ).execute()
+                st.rerun()
+        with b:
+            if st.button("Delete", key=f"delete_{task['id']}", use_container_width=True):
+                (
+                    supabase.table("lockin_tasks")
+                    .delete()
+                    .eq("id", task["id"])
+                    .eq("user_id", user_id)
+                    .execute()
+                )
                 st.rerun()
 
-    notes = get_notes(user_id)
-    if notes:
-        cards = []
-        for note in notes[:8]:
-            cards.append(
-                f'<div class="note-card">{html.escape(note.get("content") or "")}</div>'
+        g, o, i = st.columns(3)
+        with g:
+            st.link_button("Google Calendar", google_calendar_url(task), use_container_width=True)
+        with o:
+            st.link_button("Outlook", outlook_calendar_url(task), use_container_width=True)
+        with i:
+            st.download_button(
+                "Apple / ICS",
+                task_ics(task),
+                file_name=f"{task['title'].replace(' ', '_')}.ics",
+                mime="text/calendar",
+                use_container_width=True,
+                key=f"ics_{task['id']}",
             )
-        render_html('<div class="note-grid">' + "".join(cards) + '</div>')
 
-# ----------------------------
-# Progress
-# ----------------------------
-def render_progress(user_id):
+    st.markdown('<div class="section-head"><span>INBOX</span><h2>Unsorted thoughts</h2></div>', unsafe_allow_html=True)
+    inbox = [x for x in get_inbox(user_id) if x.get("status") == "open"]
+
+    for item in inbox[:20]:
+        render_html(
+            f"""
+            <article class="inbox-row">
+              <div><span>{safe(item.get("category"))}</span><strong>{safe(item.get("content"))}</strong></div>
+            </article>
+            """
+        )
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            if st.button("Plan today", key=f"plan_{item['id']}", use_container_width=True):
+                add_task(
+                    user_id,
+                    item["content"],
+                    "",
+                    "Medium",
+                    now_local().date(),
+                    None,
+                    item.get("category") if item.get("category") in ["Study", "Business", "Personal"] else "Personal",
+                )
+                supabase.table("lockin_inbox").update({"status": "planned"}).eq("id", item["id"]).eq("user_id", user_id).execute()
+                st.rerun()
+        with c2:
+            if st.button("Done", key=f"inbox_done_{item['id']}", use_container_width=True):
+                supabase.table("lockin_inbox").update({"status": "done"}).eq("id", item["id"]).eq("user_id", user_id).execute()
+                st.rerun()
+        with c3:
+            if st.button("Delete", key=f"inbox_delete_{item['id']}", use_container_width=True):
+                supabase.table("lockin_inbox").delete().eq("id", item["id"]).eq("user_id", user_id).execute()
+                st.rerun()
+
+# =========================================================
+# REVIEW
+# =========================================================
+
+def render_review(user_id):
     program = get_program(user_id)
     if not program:
-        st.info("Start your 90-day programme first.")
+        st.info("Start your programme first.")
         return
 
     render_html(
         """
-        <section class="image-hero progress-hero">
-          <div>
-            <div class="kicker on-dark">PROGRESS</div>
-            <h1>MAKE THE WORK<br>VISIBLE.</h1>
-            <p>Look for consistency, not a perfect day.</p>
-          </div>
+        <section class="sub-hero review-bg">
+          <div class="kicker on-dark">REVIEW</div>
+          <h1>SEE THE WORK.<br>ADJUST THE SYSTEM.</h1>
+          <p>The goal is not to judge yourself. It is to notice what is actually happening.</p>
         </section>
         """
     )
 
     logs = get_logs(user_id)
     workouts = get_workouts(user_id)
-    sessions = get_focus_sessions(user_id)
+    focus_sessions = get_focus_sessions(user_id)
 
-    if not logs:
-        st.info("Your charts will appear after you save your first day.")
-        return
+    st.markdown('<div class="section-head"><span>90 DAYS</span><h2>Your map</h2></div>', unsafe_allow_html=True)
+    ninety_day_map(program, logs)
 
-    rows = []
-    for row in logs:
-        complete, total = score_log(row, program)
-        rows.append(
-            {
-                "date": row["log_date"],
-                "completion": round((complete / total) * 100),
-                "study": int(row.get("study_minutes") or 0),
-                "business": int(row.get("business_minutes") or 0),
-                "art": int(row.get("art_minutes") or 0),
-                "sleep": float(row.get("sleep_hours") or 0),
-                "calories": int(row.get("calories_actual") or 0),
-                "protein": int(row.get("protein_actual") or 0),
-            }
+    if logs:
+        rows = []
+        for row in logs:
+            done, total = score_log(row, program)
+            rows.append(
+                {
+                    "date": row["log_date"],
+                    "completion": round(done / total * 100),
+                    "study": int(row.get("study_minutes") or 0),
+                    "business": int(row.get("business_minutes") or 0),
+                    "art": int(row.get("art_minutes") or 0),
+                    "sleep": float(row.get("sleep_hours") or 0),
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        last7 = df.tail(7)
+        stat_grid(
+            [
+                ("AVG SCORE", f"{round(last7['completion'].mean())}%", "last 7 logged days"),
+                ("STUDY", f"{int(last7['study'].sum())} min", "last 7 logged days"),
+                ("BUSINESS", f"{int(last7['business'].sum())} min", "last 7 logged days"),
+                ("WORKOUTS", len([x for x in workouts if x.get("workout_date") >= str(now_local().date() - timedelta(days=6))]), "last 7 days"),
+            ]
         )
 
-    df = pd.DataFrame(rows)
+        st.markdown('<div class="section-head"><span>TREND</span><h2>Consistency</h2></div>', unsafe_allow_html=True)
+        st.line_chart(df.set_index("date")["completion"])
 
-    stat_cards(
-        [
-            ("DAYS LOGGED", len(df), "entries"),
-            ("AVG SCORE", f"{round(df['completion'].mean())}%", "consistency"),
-            ("WORKOUTS", len(workouts), "logged"),
-            ("FOCUS BLOCKS", len(sessions), "logged"),
-        ]
-    )
+    st.markdown('<div class="section-head"><span>WEEKLY REVIEW</span><h2>Close the loop</h2></div>', unsafe_allow_html=True)
+    today = now_local().date()
+    week_start = today - timedelta(days=today.weekday())
+    existing = first_row("weekly_reviews", {"user_id": user_id, "week_start": str(week_start)})
 
-    st.markdown('<div class="section-heading"><span>CONSISTENCY</span><h2>Daily score</h2></div>', unsafe_allow_html=True)
-    st.line_chart(df.set_index("date")["completion"])
+    with st.form("weekly_review_form"):
+        win = st.text_area(
+            "Biggest win",
+            value=(existing or {}).get("biggest_win") or "",
+            placeholder="What actually went well?",
+        )
+        friction = st.text_area(
+            "What got in the way?",
+            value=(existing or {}).get("friction") or "",
+            placeholder="What kept repeating or making things harder?",
+        )
+        next_focus = st.text_area(
+            "One focus for next week",
+            value=(existing or {}).get("next_focus") or "",
+            placeholder="Choose one improvement, not ten.",
+        )
+        rating = st.slider(
+            "Week rating",
+            1,
+            10,
+            int((existing or {}).get("rating") or 7),
+        )
 
-    st.markdown('<div class="section-heading"><span>FOCUS</span><h2>Minutes</h2></div>', unsafe_allow_html=True)
-    st.bar_chart(df.set_index("date")[["study", "business", "art"]])
+        if st.form_submit_button("Save weekly review", type="primary", use_container_width=True):
+            payload = {
+                "user_id": user_id,
+                "week_start": str(week_start),
+                "biggest_win": win.strip(),
+                "friction": friction.strip(),
+                "next_focus": next_focus.strip(),
+                "rating": rating,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            if existing:
+                supabase.table("weekly_reviews").update(payload).eq("id", existing["id"]).eq("user_id", user_id).execute()
+            else:
+                supabase.table("weekly_reviews").insert(payload).execute()
+            st.success("Weekly review saved.")
+            st.rerun()
 
-    st.markdown('<div class="section-heading"><span>RECOVERY</span><h2>Sleep</h2></div>', unsafe_allow_html=True)
-    st.line_chart(df.set_index("date")["sleep"])
+    reviews = get_weekly_reviews(user_id)[:6]
+    if reviews:
+        cards = []
+        for review in reviews:
+            cards.append(
+                (
+                    '<article class="review-card">'
+                    f'<div class="review-week">WEEK OF {safe(review.get("week_start"))}</div>'
+                    f'<div class="review-rating">{int(review.get("rating") or 0)}/10</div>'
+                    f'<p><strong>Win:</strong> {safe(review.get("biggest_win") or "—")}</p>'
+                    f'<p><strong>Next:</strong> {safe(review.get("next_focus") or "—")}</p>'
+                    '</article>'
+                )
+            )
+        render_html('<section class="review-grid">' + "".join(cards) + '</section>')
 
-    st.markdown('<div class="section-heading"><span>NUTRITION</span><h2>Calories + protein</h2></div>', unsafe_allow_html=True)
-    st.dataframe(
-        df[["date", "calories", "protein"]],
-        use_container_width=True,
-        hide_index=True,
-    )
+    with st.expander("Edit programme targets"):
+        c1, c2 = st.columns(2)
+        with c1:
+            goal = st.text_area("Goal", value=program.get("goal") or "")
+            calories = st.number_input("Calories target", 1000, 6000, target(program, "calorie_target", 2200), 50)
+            protein = st.number_input("Protein target", 40, 350, target(program, "protein_target", 150), 5)
+            wake = st.time_input("Wake target", value=time.fromisoformat(str(program.get("wake_target") or "08:00:00")[:8]))
+        with c2:
+            study = st.number_input("Study target", 0, 300, target(program, "study_target", 60), 5)
+            business = st.number_input("Business target", 0, 300, target(program, "business_target", 45), 5)
+            art = st.number_input("Art target", 0, 300, target(program, "art_target", 30), 5)
+            room = st.number_input("Room reset target", 0, 120, target(program, "room_target", 15), 5)
+            bed = st.time_input("Bed target", value=time.fromisoformat(str(program.get("bed_target") or "23:00:00")[:8]))
 
-# ----------------------------
-# Run app
-# ----------------------------
+        if st.button("Save programme targets", use_container_width=True):
+            update_program(
+                user_id,
+                program["id"],
+                {
+                    "goal": goal,
+                    "calorie_target": calories,
+                    "protein_target": protein,
+                    "study_target": study,
+                    "business_target": business,
+                    "art_target": art,
+                    "room_target": room,
+                    "wake_target": wake,
+                    "bed_target": bed,
+                },
+            )
+            st.rerun()
+
+# =========================================================
+# APP
+# =========================================================
+
 init_state()
 restore_session()
 
@@ -1227,27 +1376,25 @@ if AUTH_REQUIRED and not st.session_state.user_email:
     st.stop()
 
 user_id = current_user_id()
-
 if not user_id:
     st.error(
-        "No profile is configured. In private mode, add PUBLIC_PROFILE_ID to Streamlit Secrets. "
-        "Or set AUTH_REQUIRED=true and use Supabase login."
+        "No profile is configured. Add PUBLIC_PROFILE_ID in private mode, "
+        "or enable authentication."
     )
     st.stop()
 
 header_left, header_right = st.columns([4, 1])
 with header_left:
-    st.markdown(
+    render_html(
         """
         <div class="brand">
           <div class="brand-icon">L90</div>
           <div>
-            <div class="brand-name">LOCK IN 90</div>
+            <div class="brand-title">LOCK IN 90</div>
             <div class="brand-sub">personal operating system</div>
           </div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 with header_right:
@@ -1260,17 +1407,18 @@ with header_right:
             clear_session()
             st.rerun()
     else:
-        st.markdown('<div class="private-badge">PRIVATE MODE</div>', unsafe_allow_html=True)
+        render_html('<div class="mode-pill">PRIVATE</div>')
 
 nav()
 
-if st.session_state.page == "Today":
+page = st.session_state.page
+if page == "Today":
     render_today(user_id)
-elif st.session_state.page == "Training":
-    render_training(user_id)
-elif st.session_state.page == "Focus":
+elif page == "Focus":
     render_focus(user_id)
-elif st.session_state.page == "Tasks":
+elif page == "Training":
+    render_training(user_id)
+elif page == "Tasks":
     render_tasks(user_id)
-elif st.session_state.page == "Progress":
-    render_progress(user_id)
+elif page == "Review":
+    render_review(user_id)

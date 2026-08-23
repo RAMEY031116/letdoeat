@@ -1,47 +1,59 @@
 
-# Lock In 90 — rebuilt version
+# Lock In 90 v3
 
-This is a clean rebuild of the app.
+This is the bigger "personal operating system" version.
 
-## What is fixed
-- Focus target values are NOT Streamlit metrics anymore.
-- `60 min`, `45 min`, `30 min`, `15 min` are custom HTML with explicit dark text.
-- Cleaner mobile layout.
-- More consistent button/input contrast.
-- Better Today, Training, Focus, Tasks, and Progress sections.
-- Focus timer added.
-- Calories/protein actual values + targets added.
-- Quick notes added.
-- Existing calendar functionality retained.
+## New in v3
 
-## Supabase
-Run `schema_v2.sql` in Supabase SQL Editor.
+### Today Command Centre
+- Day X / 90
+- today's score
+- streak
+- sleep
+- automatic "Next Action"
+- daily visual timeline
+- one quick check-in form
 
-It is safe to run if you already ran the earlier schema:
-- it uses `create table if not exists`
-- it uses `add column if not exists`
-- it does not delete your existing Lock In data
+### No Negotiation
+The app looks at the time and what you have already completed, then shows the next incomplete block.
 
-Do NOT run `enable_auth_rls.sql` while you are still using private/no-login mode.
+### Focus Mode
+- Study / Business / Art / Room target cards
+- large focus timer
+- completed focus blocks add to today's totals automatically
 
-## Streamlit secrets
-Use your real Supabase URL and publishable key.
+### Brain Dump
+Capture anything quickly.
+Later, on Tasks, turn it into today's task, mark it done, or delete it.
 
-```toml
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_KEY = "your-publishable-key"
-AUTH_REQUIRED = "false"
-PUBLIC_PROFILE_ID = "your-existing-public-profile-id"
-```
+### Training
+Very simple:
+- lunch movement
+- your own evening gym
+- recovery when needed
+No invented workout split.
 
-Keep the SAME PUBLIC_PROFILE_ID you are already using so the new version continues to see your existing data.
+### Tasks + Calendar
+- normal task list
+- Google Calendar
+- Outlook
+- Apple / ICS
+- Brain Dump inbox
 
-## GitHub
-Replace the old app files with:
-- `app.py`
-- `style.css`
-- `requirements.txt`
+### Review
+- 90-day visual map
+- last-seven-day numbers
+- consistency chart
+- weekly review
+- programme target editor
 
-Then run `schema_v2.sql` once in Supabase.
+## Upgrade steps
 
-You do not need to change your existing Streamlit secrets if they already work.
+1. Replace your GitHub `app.py` and `style.css`.
+2. Replace/update `requirements.txt`.
+3. Run `schema_v3.sql` once in Supabase SQL Editor.
+4. Keep the SAME `PUBLIC_PROFILE_ID` you already use.
+5. Add this optional secret:
+   `APP_TIMEZONE = "Europe/London"`
+
+Do not run `enable_auth_rls.sql` while you are still in no-login/private mode.
