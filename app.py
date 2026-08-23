@@ -1,6 +1,7 @@
 
 import os
 import html
+import textwrap
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -404,6 +405,14 @@ def current_streak(logs, program):
     return value
 
 # ----------------------------
+# Safe HTML rendering
+# ----------------------------
+def render_html(markup: str):
+    """Render custom HTML without Markdown treating indented lines as code."""
+    st.markdown(textwrap.dedent(markup).strip(), unsafe_allow_html=True)
+
+
+# ----------------------------
 # Display components
 # ----------------------------
 def nav():
@@ -429,18 +438,16 @@ def stat_cards(items):
     cards = []
     for label, value, hint in items:
         cards.append(
-            f"""
-            <div class="stat-card">
-              <div class="stat-label">{html.escape(str(label))}</div>
-              <div class="stat-value">{html.escape(str(value))}</div>
-              <div class="stat-hint">{html.escape(str(hint))}</div>
-            </div>
-            """
+            (
+                '<div class="stat-card">'
+                f'<div class="stat-label">{html.escape(str(label))}</div>'
+                f'<div class="stat-value">{html.escape(str(value))}</div>'
+                f'<div class="stat-hint">{html.escape(str(hint))}</div>'
+                '</div>'
+            )
         )
-    st.markdown(
-        '<div class="stat-grid">' + "".join(cards) + "</div>",
-        unsafe_allow_html=True,
-    )
+    render_html('<div class="stat-grid">' + "".join(cards) + '</div>')
+
 
 def focus_target_cards(program):
     cards = [
@@ -453,22 +460,20 @@ def focus_target_cards(program):
     html_cards = []
     for label, minutes, subtitle in cards:
         html_cards.append(
-            f"""
-            <article class="focus-target-card">
-              <div class="focus-target-top">
-                <span class="focus-target-label">{label}</span>
-                <span class="focus-target-dot"></span>
-              </div>
-              <div class="focus-target-number">{minutes}<span> min</span></div>
-              <div class="focus-target-sub">{subtitle}</div>
-            </article>
-            """
+            (
+                '<article class="focus-target-card">'
+                '<div class="focus-target-top">'
+                f'<span class="focus-target-label">{html.escape(str(label))}</span>'
+                '<span class="focus-target-dot"></span>'
+                '</div>'
+                f'<div class="focus-target-number">{int(minutes)}<span> min</span></div>'
+                f'<div class="focus-target-sub">{html.escape(str(subtitle))}</div>'
+                '</article>'
+            )
         )
 
-    st.markdown(
-        '<section class="focus-target-grid">' + "".join(html_cards) + "</section>",
-        unsafe_allow_html=True,
-    )
+    render_html('<section class="focus-target-grid">' + "".join(html_cards) + '</section>')
+
 
 def focus_timer():
     components.html(
@@ -747,15 +752,18 @@ def render_today(user_id):
     rows = []
     for when, title, detail in rhythm:
         rows.append(
-            f"""
-            <div class="rhythm-row">
-              <div class="rhythm-time">{when}</div>
-              <div><strong>{title}</strong><span>{detail}</span></div>
-            </div>
-            """
+            (
+                '<div class="rhythm-row">'
+                f'<div class="rhythm-time">{html.escape(str(when))}</div>'
+                '<div>'
+                f'<strong>{html.escape(str(title))}</strong>'
+                f'<span>{html.escape(str(detail))}</span>'
+                '</div>'
+                '</div>'
+            )
         )
 
-    st.markdown('<div class="rhythm-card">' + "".join(rows) + "</div>", unsafe_allow_html=True)
+    render_html('<div class="rhythm-card">' + "".join(rows) + '</div>')
 
     with st.expander("Edit my targets"):
         c1, c2 = st.columns(2)
@@ -800,7 +808,7 @@ def render_today(user_id):
 # Training
 # ----------------------------
 def render_training(user_id):
-    st.markdown(
+    render_html(
         """
         <section class="image-hero training-hero">
           <div>
@@ -809,8 +817,7 @@ def render_training(user_id):
             <p>Two visits can work. Only one needs to be hard.</p>
           </div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     schedule = [
@@ -826,15 +833,24 @@ def render_training(user_id):
     cards = []
     for day, lunch, lunch_detail, evening, evening_detail in schedule:
         cards.append(
-            f"""
-            <div class="training-row">
-              <div class="day-badge">{day}</div>
-              <div><span>LUNCH</span><strong>{lunch}</strong><small>{lunch_detail}</small></div>
-              <div><span>EVENING</span><strong>{evening}</strong><small>{evening_detail}</small></div>
-            </div>
-            """
+            (
+                '<div class="training-row">'
+                f'<div class="day-badge">{html.escape(str(day))}</div>'
+                '<div>'
+                '<span>LUNCH</span>'
+                f'<strong>{html.escape(str(lunch))}</strong>'
+                f'<small>{html.escape(str(lunch_detail))}</small>'
+                '</div>'
+                '<div>'
+                '<span>EVENING</span>'
+                f'<strong>{html.escape(str(evening))}</strong>'
+                f'<small>{html.escape(str(evening_detail))}</small>'
+                '</div>'
+                '</div>'
+            )
         )
-    st.markdown('<div class="training-list">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+    render_html('<div class="training-list">' + "".join(cards) + '</div>')
 
     st.markdown('<div class="section-heading"><span>PROGRAM</span><h2>Weight sessions</h2></div>', unsafe_allow_html=True)
 
@@ -941,7 +957,7 @@ def render_focus(user_id):
         st.info("Start your 90-day programme on the Today page first.")
         return
 
-    st.markdown(
+    render_html(
         """
         <section class="image-hero focus-hero">
           <div>
@@ -950,8 +966,7 @@ def render_focus(user_id):
             <p>One evening, four clear blocks. No guessing what comes next.</p>
           </div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     # IMPORTANT:
@@ -995,7 +1010,7 @@ def render_focus(user_id):
 # Tasks + Calendar
 # ----------------------------
 def render_tasks(user_id):
-    st.markdown(
+    render_html(
         """
         <section class="image-hero tasks-hero">
           <div>
@@ -1004,8 +1019,7 @@ def render_tasks(user_id):
             <p>Create tasks here, then push them into Google, Outlook or Apple Calendar.</p>
           </div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     with st.expander("＋ Add a task", expanded=True):
@@ -1066,16 +1080,14 @@ def render_tasks(user_id):
             task_notes = html.escape(task.get("notes") or "")
             task_time_text = f" · {str(task['task_time'])[:5]}" if task.get("task_time") else ""
 
-            st.markdown(
-                f"""
-                <div class="task-card">
-                  <div class="task-meta">{html.escape(task['priority'])} · {html.escape(task['category'])} · {task['task_date']}{task_time_text}</div>
-                  <div class="task-title">{'✓ ' if task.get('completed') else ''}{task_title}</div>
-                  {'<div class="task-note">' + task_notes + '</div>' if task_notes else ''}
-                </div>
-                """,
-                unsafe_allow_html=True,
+            task_html = (
+                '<div class="task-card">'
+                f'<div class="task-meta">{html.escape(task["priority"])} · {html.escape(task["category"])} · {task["task_date"]}{task_time_text}</div>'
+                f'<div class="task-title">{"✓ " if task.get("completed") else ""}{task_title}</div>'
+                + (f'<div class="task-note">{task_notes}</div>' if task_notes else '')
+                + '</div>'
             )
+            render_html(task_html)
 
             action1, action2 = st.columns(2)
             with action1:
@@ -1140,7 +1152,7 @@ def render_tasks(user_id):
             cards.append(
                 f'<div class="note-card">{html.escape(note.get("content") or "")}</div>'
             )
-        st.markdown('<div class="note-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+        render_html('<div class="note-grid">' + "".join(cards) + '</div>')
 
 # ----------------------------
 # Progress
@@ -1151,7 +1163,7 @@ def render_progress(user_id):
         st.info("Start your 90-day programme first.")
         return
 
-    st.markdown(
+    render_html(
         """
         <section class="image-hero progress-hero">
           <div>
@@ -1160,8 +1172,7 @@ def render_progress(user_id):
             <p>Look for consistency, not a perfect day.</p>
           </div>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     logs = get_logs(user_id)
