@@ -19,3 +19,199 @@ div[data-testid="stVerticalBlockBorderWrapper"]{border-radius:22px!important;bor
 .workout-row{display:grid;grid-template-columns:82px 1fr 1fr;gap:16px;align-items:center;padding:15px 16px;margin-bottom:9px;background:rgba(255,255,255,.86);border:1px solid var(--line);border-radius:18px}.day-pill{width:58px;padding:8px 0;text-align:center;border-radius:12px;background:#111318;color:#fff;font-size:.76rem;font-weight:900;letter-spacing:.08em}.workout-row span{display:block;color:var(--muted);font-size:.68rem;letter-spacing:.12em;font-weight:800;margin-bottom:.18rem}
 .auth-shell{min-height:330px;border-radius:30px;padding:34px;display:flex;align-items:center;justify-content:space-between;gap:2rem;color:#fff;background:linear-gradient(135deg,#111318,#2d313a);box-shadow:0 24px 70px rgba(15,16,18,.18);margin-bottom:1.2rem}.auth-copy h1{font-size:clamp(3rem,8vw,6rem);line-height:.82;letter-spacing:-.06em;margin:.4rem 0 .8rem}.auth-copy h1 span{opacity:.35}.auth-copy p{max-width:560px;color:rgba(255,255,255,.66)}.auth-art{min-width:180px}.orb.outer{width:165px;height:165px;border-radius:999px;border:1px solid rgba(255,255,255,.15);display:grid;place-items:center;background:rgba(255,255,255,.06)}.orb.inner{width:112px;height:112px;border-radius:999px;display:grid;place-items:center;background:#fff;color:#111318;font-size:2.7rem;font-weight:900}
 @media(max-width:700px){.block-container{padding:.75rem .75rem 5rem}.hero-card{padding:22px;align-items:flex-start}.hero-card h1{font-size:2.7rem}.hero-illustration{width:76px;height:76px;min-width:76px;font-size:1.05rem}.workout-row{grid-template-columns:1fr;gap:8px}.timeline{grid-template-columns:86px 1fr}.auth-shell{padding:24px;min-height:280px}.auth-art{display:none}[data-testid="stHorizontalBlock"]{gap:.35rem}.stButton button{font-size:.76rem;padding-left:.55rem!important;padding-right:.55rem!important}}
+
+
+/* ---------------------------------
+   Streamlit contrast + hover fixes
+   --------------------------------- */
+
+/* Top navigation buttons */
+.stButton > button {
+  color: #111318 !important;
+  background: rgba(255,255,255,.92) !important;
+  border: 1px solid rgba(15,17,20,.08) !important;
+}
+
+.stButton > button:hover {
+  color: #111318 !important;
+  background: #ffffff !important;
+  border-color: rgba(15,17,20,.20) !important;
+  box-shadow: 0 8px 22px rgba(14,17,22,.08) !important;
+}
+
+.stButton > button:focus,
+.stButton > button:active {
+  color: #111318 !important;
+  background: #ffffff !important;
+  border-color: #111318 !important;
+}
+
+/* Primary buttons stay dark */
+.stButton > button[kind="primary"] {
+  color: #ffffff !important;
+  background: #111318 !important;
+  border-color: #111318 !important;
+}
+
+.stButton > button[kind="primary"]:hover,
+.stButton > button[kind="primary"]:focus,
+.stButton > button[kind="primary"]:active {
+  color: #ffffff !important;
+  background: #252932 !important;
+  border-color: #252932 !important;
+}
+
+/* Link buttons */
+a[data-testid="stLinkButton"],
+a[data-testid="stLinkButton"] p {
+  color: #111318 !important;
+  background: #ffffff !important;
+}
+
+a[data-testid="stLinkButton"]:hover,
+a[data-testid="stLinkButton"]:hover p {
+  color: #111318 !important;
+}
+
+/* Download buttons */
+.stDownloadButton > button,
+.stDownloadButton > button p {
+  color: #111318 !important;
+  background: #ffffff !important;
+}
+
+.stDownloadButton > button:hover,
+.stDownloadButton > button:hover p {
+  color: #111318 !important;
+  background: #ffffff !important;
+}
+
+/* Inputs and text areas */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input,
+[data-baseweb="select"] input,
+[data-baseweb="select"] div {
+  color: #111318 !important;
+}
+
+[data-testid="stTextInput"] input::placeholder,
+[data-testid="stTextArea"] textarea::placeholder {
+  color: #8a9099 !important;
+  opacity: 1 !important;
+}
+
+/* Date/time inputs */
+[data-testid="stDateInput"] input,
+[data-testid="stTimeInput"] input {
+  color: #111318 !important;
+}
+
+/* Selectbox selected text */
+[data-baseweb="select"] > div {
+  background: #ffffff !important;
+  color: #111318 !important;
+}
+
+[data-baseweb="select"] svg {
+  fill: #111318 !important;
+}
+
+/* Popovers / menus / dropdowns */
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+[role="listbox"] {
+  background: #ffffff !important;
+  color: #111318 !important;
+}
+
+[role="option"] {
+  color: #111318 !important;
+  background: #ffffff !important;
+}
+
+[role="option"]:hover,
+[aria-selected="true"][role="option"] {
+  color: #111318 !important;
+  background: #f1f3f5 !important;
+}
+
+/* Tabs */
+button[data-baseweb="tab"] {
+  color: #606772 !important;
+}
+
+button[data-baseweb="tab"]:hover,
+button[data-baseweb="tab"][aria-selected="true"] {
+  color: #111318 !important;
+}
+
+/* Expanders */
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] details,
+[data-testid="stExpander"] div {
+  color: #111318;
+}
+
+[data-testid="stExpander"] summary:hover {
+  color: #111318 !important;
+}
+
+/* Checkbox / radio labels */
+[data-testid="stCheckbox"] label,
+[data-testid="stCheckbox"] label p,
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label p {
+  color: #111318 !important;
+}
+
+/* Form labels and general captions on light surfaces */
+label,
+[data-testid="stWidgetLabel"] p {
+  color: #30343b !important;
+}
+
+[data-testid="stCaptionContainer"] p {
+  color: #747b86 !important;
+}
+
+/* Dataframes and table wrappers */
+[data-testid="stDataFrame"] {
+  color: #111318 !important;
+}
+
+/* Keep intentionally dark hero/banner text white */
+.hero-card,
+.hero-card *,
+.banner-photo,
+.banner-photo *,
+.auth-shell,
+.auth-shell * {
+  color: #ffffff;
+}
+
+.hero-card p,
+.auth-copy p {
+  color: rgba(255,255,255,.68) !important;
+}
+
+.hero-card .eyebrow,
+.banner-photo .eyebrow,
+.auth-shell .eyebrow {
+  color: rgba(255,255,255,.72) !important;
+}
+
+/* Mobile top nav: keep label visible */
+@media(max-width:700px){
+  .stButton > button {
+    color: #111318 !important;
+    background: rgba(255,255,255,.96) !important;
+  }
+
+  .stButton > button:hover,
+  .stButton > button:focus {
+    color: #111318 !important;
+    background: #ffffff !important;
+  }
+}
