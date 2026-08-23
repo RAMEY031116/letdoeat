@@ -813,139 +813,129 @@ def render_training(user_id):
         <section class="image-hero training-hero">
           <div>
             <div class="kicker on-dark">TRAINING</div>
-            <h1>MOVE AT LUNCH.<br>BUILD AFTER WORK.</h1>
-            <p>Two visits can work. Only one needs to be hard.</p>
+            <h1>YOUR TRAINING.<br>YOUR CHOICE.</h1>
+            <p>The app keeps the structure simple. You decide what workout you actually do.</p>
           </div>
         </section>
         """
     )
 
-    schedule = [
-        ("MON", "Cardio", "20–30 min", "Upper A", "60 min"),
-        ("TUE", "Cardio", "20–30 min", "Lower A", "60 min"),
-        ("WED", "Easy walk", "20–30 min", "Recovery", "No weights"),
-        ("THU", "Cardio", "20–30 min", "Upper B", "60 min"),
-        ("FRI", "Cardio", "20–30 min", "Lower B", "60 min"),
-        ("SAT", "Optional", "Easy activity", "Optional", "Accessories / full body"),
-        ("SUN", "Rest", "Recovery", "Rest", "Full recovery"),
-    ]
+    st.markdown(
+        '<div class="section-heading"><span>THE SIMPLE SYSTEM</span><h2>Two sessions, different jobs</h2></div>',
+        unsafe_allow_html=True,
+    )
 
-    cards = []
-    for day, lunch, lunch_detail, evening, evening_detail in schedule:
-        cards.append(
-            (
-                '<div class="training-row">'
-                f'<div class="day-badge">{html.escape(str(day))}</div>'
-                '<div>'
-                '<span>LUNCH</span>'
-                f'<strong>{html.escape(str(lunch))}</strong>'
-                f'<small>{html.escape(str(lunch_detail))}</small>'
-                '</div>'
-                '<div>'
-                '<span>EVENING</span>'
-                f'<strong>{html.escape(str(evening))}</strong>'
-                f'<small>{html.escape(str(evening_detail))}</small>'
-                '</div>'
-                '</div>'
-            )
-        )
+    render_html(
+        """
+        <section class="training-simple-grid">
+          <article class="training-simple-card">
+            <div class="training-simple-icon">☀</div>
+            <div class="training-simple-kicker">LUNCH</div>
+            <div class="training-simple-title">Move</div>
+            <div class="training-simple-copy">
+              Cardio, walking or light movement. Keep it short enough that you can return to work feeling good.
+            </div>
+            <div class="training-simple-time">20–30 min</div>
+          </article>
 
-    render_html('<div class="training-list">' + "".join(cards) + '</div>')
+          <article class="training-simple-card training-simple-card-dark">
+            <div class="training-simple-icon">◫</div>
+            <div class="training-simple-kicker">AFTER WORK</div>
+            <div class="training-simple-title">Train</div>
+            <div class="training-simple-copy">
+              Do your own gym workout. The app does not choose your exercises or split for you.
+            </div>
+            <div class="training-simple-time">Your session</div>
+          </article>
 
-    st.markdown('<div class="section-heading"><span>PROGRAM</span><h2>Weight sessions</h2></div>', unsafe_allow_html=True)
+          <article class="training-simple-card">
+            <div class="training-simple-icon">↺</div>
+            <div class="training-simple-kicker">WHEN NEEDED</div>
+            <div class="training-simple-title">Recover</div>
+            <div class="training-simple-copy">
+              Rest, walk, stretch or skip the second session when recovery is the better choice.
+            </div>
+            <div class="training-simple-time">Part of the plan</div>
+          </article>
+        </section>
+        """
+    )
 
-    workout_templates = {
-        "Upper A": [
-            "Bench press — 3 × 6–10",
-            "Lat pulldown — 3 × 8–12",
-            "Seated shoulder press — 3 × 8–12",
-            "Cable / machine row — 3 × 8–12",
-            "Lateral raise — 2–3 × 12–15",
-            "Biceps + triceps — 2 × 10–15 each",
-        ],
-        "Lower A": [
-            "Squat or leg press — 3 × 6–10",
-            "Romanian deadlift — 3 × 8–12",
-            "Leg curl — 3 × 10–15",
-            "Leg extension — 2 × 10–15",
-            "Calf raise — 3 × 10–15",
-        ],
-        "Upper B": [
-            "Incline press — 3 × 8–12",
-            "Pull-up / pulldown — 3 × 8–12",
-            "Chest-supported row — 3 × 8–12",
-            "Machine / dumbbell shoulder press — 2–3 × 8–12",
-            "Lateral raise — 2–3 × 12–15",
-            "Biceps + triceps — 2 × 10–15 each",
-        ],
-        "Lower B": [
-            "Hack squat or leg press — 3 × 8–12",
-            "Hip hinge / Romanian deadlift — 3 × 8–12",
-            "Walking lunge — 2 × 8–12 each leg",
-            "Leg curl — 3 × 10–15",
-            "Calf raise — 3 × 10–15",
-        ],
-    }
+    st.markdown(
+        '<div class="section-heading"><span>TODAY</span><h2>Quick training log</h2></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Only log what is useful. No sets, reps or exercise tracking unless you decide you want that later.")
 
-    tabs = st.tabs(list(workout_templates.keys()))
-    for tab, (name, exercises) in zip(tabs, workout_templates.items()):
-        with tab:
-            for exercise in exercises:
-                st.markdown(f"- {exercise}")
-            st.caption("Progress by adding a rep or a small amount of weight when the top of the rep range feels controlled.")
-
-    st.markdown('<div class="section-heading"><span>LOG</span><h2>Workout entry</h2></div>', unsafe_allow_html=True)
     with st.form("workout_form"):
         c1, c2 = st.columns(2)
         with c1:
             workout_date = st.date_input("Date", value=date.today(), key="workout_date")
             session = st.selectbox(
-                "Session",
-                ["Lunch cardio", "Upper A", "Lower A", "Upper B", "Lower B", "Recovery", "Other"],
+                "What did you do?",
+                [
+                    "Lunch cardio / movement",
+                    "Evening gym",
+                    "Both",
+                    "Recovery / rest",
+                    "Other",
+                ],
             )
-            duration = st.number_input("Duration (min)", 0, 300, 45, 5)
         with c2:
-            exercise = st.text_input("Exercise / activity")
-            sets = st.number_input("Sets", 0, 20, 0)
-            reps = st.number_input("Reps", 0, 200, 0)
-            weight = st.number_input("Weight", 0.0, 500.0, 0.0, 0.5)
+            duration = st.number_input("Total minutes", 0, 300, 30, 5)
+            effort = st.select_slider(
+                "How did it feel?",
+                options=["Easy", "Good", "Hard", "Very hard"],
+                value="Good",
+            )
 
-        notes = st.text_area("Workout note")
+        notes = st.text_area(
+            "Optional note",
+            placeholder="Example: good session, legs tired, treadmill + gym, rest day...",
+        )
 
-        if st.form_submit_button("Save workout", type="primary", use_container_width=True):
+        if st.form_submit_button("Save training", type="primary", use_container_width=True):
             supabase.table("workouts").insert(
                 {
                     "user_id": user_id,
                     "workout_date": str(workout_date),
                     "session": session,
-                    "exercise": exercise.strip(),
-                    "sets": sets,
-                    "reps": reps,
-                    "weight": weight,
+                    "exercise": "",
+                    "sets": 0,
+                    "reps": 0,
+                    "weight": 0,
                     "duration_minutes": duration,
-                    "notes": notes.strip(),
+                    "notes": f"{effort}" + (f" — {notes.strip()}" if notes.strip() else ""),
                 }
             ).execute()
-            st.success("Workout saved.")
+            st.success("Training saved.")
             st.rerun()
 
     workouts = get_workouts(user_id)
     if workouts:
-        df = pd.DataFrame(workouts)
-        columns = [
-            col
-            for col in [
-                "workout_date",
-                "session",
-                "exercise",
-                "sets",
-                "reps",
-                "weight",
-                "duration_minutes",
-            ]
-            if col in df.columns
-        ]
-        st.dataframe(df[columns], use_container_width=True, hide_index=True)
+        st.markdown(
+            '<div class="section-heading"><span>RECENT</span><h2>Your sessions</h2></div>',
+            unsafe_allow_html=True,
+        )
+
+        recent = workouts[:8]
+        cards = []
+        for row in recent:
+            raw_note = row.get("notes") or ""
+            cards.append(
+                (
+                    '<div class="training-history-card">'
+                    f'<div class="training-history-date">{html.escape(str(row.get("workout_date", "")))}</div>'
+                    f'<div class="training-history-title">{html.escape(str(row.get("session", "Training")))}</div>'
+                    f'<div class="training-history-meta">{int(row.get("duration_minutes") or 0)} min'
+                    + (f' · {html.escape(raw_note)}' if raw_note else '')
+                    + '</div>'
+                    '</div>'
+                )
+            )
+
+        render_html('<div class="training-history-grid">' + "".join(cards) + '</div>')
+
 
 # ----------------------------
 # Focus

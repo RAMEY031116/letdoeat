@@ -566,3 +566,154 @@ a[data-testid="stLinkButton"]:hover{
 
   .login-orb{display:none}
 }
+
+
+/* ---------- simplified training page ---------- */
+.training-simple-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:14px;
+  margin:18px 0 8px;
+}
+
+.training-simple-card{
+  position:relative;
+  min-height:250px;
+  padding:20px;
+  border-radius:24px;
+  border:1px solid var(--line);
+  background:#fff;
+  box-shadow:var(--shadow);
+  display:flex;
+  flex-direction:column;
+}
+
+.training-simple-card-dark{
+  background:#111318;
+  border-color:#111318;
+}
+
+.training-simple-icon{
+  width:42px;
+  height:42px;
+  border-radius:14px;
+  display:grid;
+  place-items:center;
+  background:#f0f2f4;
+  color:#111318!important;
+  font-size:1.15rem;
+  font-weight:900;
+  margin-bottom:24px;
+}
+
+.training-simple-card-dark .training-simple-icon{
+  background:rgba(255,255,255,.12);
+  color:#fff!important;
+}
+
+.training-simple-kicker{
+  color:#8b9199!important;
+  -webkit-text-fill-color:#8b9199!important;
+  font-size:.64rem;
+  font-weight:900;
+  letter-spacing:.14em;
+}
+
+.training-simple-card-dark .training-simple-kicker{
+  color:rgba(255,255,255,.52)!important;
+  -webkit-text-fill-color:rgba(255,255,255,.52)!important;
+}
+
+.training-simple-title{
+  color:#111318!important;
+  -webkit-text-fill-color:#111318!important;
+  font-size:1.65rem;
+  line-height:1;
+  font-weight:900;
+  letter-spacing:-.04em;
+  margin-top:7px;
+}
+
+.training-simple-card-dark .training-simple-title{
+  color:#fff!important;
+  -webkit-text-fill-color:#fff!important;
+}
+
+.training-simple-copy{
+  color:#737a84!important;
+  -webkit-text-fill-color:#737a84!important;
+  font-size:.84rem;
+  line-height:1.55;
+  margin-top:12px;
+}
+
+.training-simple-card-dark .training-simple-copy{
+  color:rgba(255,255,255,.65)!important;
+  -webkit-text-fill-color:rgba(255,255,255,.65)!important;
+}
+
+.training-simple-time{
+  margin-top:auto;
+  padding-top:22px;
+  color:#111318!important;
+  -webkit-text-fill-color:#111318!important;
+  font-size:.88rem;
+  font-weight:850;
+}
+
+.training-simple-card-dark .training-simple-time{
+  color:#fff!important;
+  -webkit-text-fill-color:#fff!important;
+}
+
+.training-history-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+
+.training-history-card{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:18px;
+  padding:15px 16px;
+  box-shadow:0 10px 25px rgba(17,19,24,.04);
+}
+
+.training-history-date{
+  color:#90969e!important;
+  -webkit-text-fill-color:#90969e!important;
+  font-size:.67rem;
+  font-weight:850;
+  letter-spacing:.08em;
+}
+
+.training-history-title{
+  color:#111318!important;
+  -webkit-text-fill-color:#111318!important;
+  font-size:1rem;
+  font-weight:850;
+  margin-top:5px;
+}
+
+.training-history-meta{
+  color:#7b828b!important;
+  -webkit-text-fill-color:#7b828b!important;
+  font-size:.78rem;
+  margin-top:4px;
+}
+
+@media(max-width:760px){
+  .training-simple-grid{
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+
+  .training-simple-card{
+    min-height:190px;
+  }
+
+  .training-history-grid{
+    grid-template-columns:1fr;
+  }
+}
