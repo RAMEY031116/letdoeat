@@ -1,655 +1,656 @@
+
 import os
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
+BASE_DIR = Path(__file__).parent
+
 st.set_page_config(
-    page_title="Lets Do Eat",
-    page_icon="🗂️",
+    page_title="LOCK IN 90",
+    page_icon="🔒",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+css_file = BASE_DIR / "style.css"
+if css_file.exists():
+    st.markdown(f"<style>{css_file.read_text()}</style>", unsafe_allow_html=True)
 
-# ---------------------------
-# Supabase connection
-# ---------------------------
+def get_secret(name, default=""):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return os.getenv(name, default)
+
 @st.cache_resource
 def get_supabase() -> Client:
-    url = os.getenv("SUPABASE_URL", "")
-    key = os.getenv("SUPABASE_KEY", "")
-
+    url = get_secret("SUPABASE_URL")
+    key = get_secret("SUPABASE_KEY")
     if not url or not key:
-        st.error("Missing SUPABASE_URL or SUPABASE_KEY.")
+        st.error("Missing SUPABASE_URL or SUPABASE_KEY in Streamlit secrets.")
         st.stop()
-
     return create_client(url, key)
 
-
 supabase = get_supabase()
+AUTH_REQUIRED = str(get_secret("AUTH_REQUIRED", "false")).lower() == "true"
+PUBLIC_PROFILE_ID = get_secret("PUBLIC_PROFILE_ID", "")
 
+def init_state():
+    defaults = {
+        "access_token": None,
+        "refresh_token": None,
+        "user_email": None,
+        "active_page": "Today",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-# ---------------------------
-# Helpers
-# ---------------------------
-def safe_str(value):
-    return "" if value is None else str(value)
+def save_session(result):
+    if not getattr(result, "session", None) or not getattr(result, "user", None):
+        return
+    st.session_state.access_token = result.session.access_token
+    st.session_state.refresh_token = result.session.refresh_token
+    st.session_state.user_email = result.user.email
+    supabase.postgrest.auth(result.session.access_token)
 
+def clear_session():
+    for key in ["access_token", "refresh_token", "user_email"]:
+        st.session_state[key] = None
+    try:
+        supabase.postgrest.auth(None)
+    except Exception:
+        pass
 
-def get_current_user():
+def restore_session():
+    if st.session_state.access_token:
+        try:
+            supabase.postgrest.auth(st.session_state.access_token)
+            return True
+        except Exception:
+            clear_session()
+    return False
+
+def current_user_id():
+    if not AUTH_REQUIRED:
+        return PUBLIC_PROFILE_ID or None
     try:
         result = supabase.auth.get_user()
         if result and result.user:
-            return result.user
+            return str(result.user.id)
     except Exception:
         return None
     return None
 
-
-def format_dt_for_google(start_dt: datetime, end_dt: datetime):
-    return start_dt.strftime("%Y%m%dT%H%M%S"), end_dt.strftime("%Y%m%dT%H%M%S")
-
-
-def build_google_calendar_url(task_row: dict) -> str:
-    task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-    if task_row.get("task_time"):
-        task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
-    else:
-        task_time = time(9, 0)
-
-    start_dt = datetime.combine(task_date, task_time)
-    end_dt = start_dt + timedelta(minutes=60)
-    start_text, end_text = format_dt_for_google(start_dt, end_dt)
-
-    title = quote(safe_str(task_row.get("title", "")))
-    details = quote(safe_str(task_row.get("notes", "")))
-    dates = f"{start_text}/{end_text}"
-
-    return (
-        "https://calendar.google.com/calendar/render?action=TEMPLATE"
-        f"&text={title}&dates={dates}&details={details}"
-    )
-
-
-def build_outlook_calendar_url(task_row: dict) -> str:
-    task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-    if task_row.get("task_time"):
-        task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
-    else:
-        task_time = time(9, 0)
-
-    start_dt = datetime.combine(task_date, task_time)
-    end_dt = start_dt + timedelta(minutes=60)
-
-    title = quote(safe_str(task_row.get("title", "")))
-    body = quote(safe_str(task_row.get("notes", "")))
-    start_iso = quote(start_dt.isoformat())
-    end_iso = quote(end_dt.isoformat())
-
-    return (
-        "https://outlook.office.com/calendar/0/deeplink/compose?path=/calendar/action/compose"
-        f"&subject={title}&body={body}&startdt={start_iso}&enddt={end_iso}"
-    )
-
-
-def create_ics_content(task_row: dict) -> str:
-    task_date = datetime.strptime(task_row["task_date"], "%Y-%m-%d").date()
-    if task_row.get("task_time"):
-        task_time = datetime.strptime(task_row["task_time"], "%H:%M:%S").time()
-    else:
-        task_time = time(9, 0)
-
-    start_dt = datetime.combine(task_date, task_time)
-    end_dt = start_dt + timedelta(minutes=60)
-
-    start_ics = start_dt.strftime("%Y%m%dT%H%M%S")
-    end_ics = end_dt.strftime("%Y%m%dT%H%M%S")
-
-    title = safe_str(task_row.get("title", "")).replace("\n", " ")
-    notes = safe_str(task_row.get("notes", "")).replace("\n", "\\n")
-
-    return f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Lets Do Eat//EN
-BEGIN:VEVENT
-SUMMARY:{title}
-DESCRIPTION:{notes}
-DTSTART:{start_ics}
-DTEND:{end_ics}
-END:VEVENT
-END:VCALENDAR
-"""
-
-
-# ---------------------------
-# Auth
-# ---------------------------
-def init_auth_state():
-    if "access_token" not in st.session_state:
-        st.session_state.access_token = None
-    if "refresh_token" not in st.session_state:
-        st.session_state.refresh_token = None
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = None
-
-
-def save_session(auth_response):
-    session = auth_response.session
-    user = auth_response.user
-
-    st.session_state.access_token = session.access_token
-    st.session_state.refresh_token = session.refresh_token
-    st.session_state.user_email = user.email
-
-    supabase.postgrest.auth(session.access_token)
-
-
-def clear_session():
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.user_email = None
-    supabase.postgrest.auth(None)
-
-
-def try_restore_session():
-    if st.session_state.access_token:
-        supabase.postgrest.auth(st.session_state.access_token)
-        return True
-    return False
-
-
 def show_auth_screen():
-    st.markdown("## Login or sign up")
-    tab1, tab2 = st.tabs(["Login", "Sign up"])
-
-    with tab1:
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
-
-        if st.button("Login", key="login_btn", use_container_width=True):
-            if not login_email or not login_password:
-                st.warning("Enter your email and password.")
-            else:
+    st.markdown(
+        """
+        <section class="auth-shell">
+          <div class="auth-copy">
+            <div class="eyebrow">PERSONAL OPERATING SYSTEM</div>
+            <h1>LOCK IN<br><span>FOR 90.</span></h1>
+            <p>Training, food, study, business, art, room reset, tasks and calendar — one place.</p>
+          </div>
+          <div class="auth-art">
+            <div class="orb outer"><div class="orb inner">90</div></div>
+          </div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        st.info("You can run privately with no login now. Turn login on before sharing the app with friends.")
+    with right:
+        t1, t2 = st.tabs(["Log in", "Create account"])
+        with t1:
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.button("Log in", type="primary", use_container_width=True):
                 try:
-                    result = supabase.auth.sign_in_with_password({
-                        "email": login_email,
-                        "password": login_password,
-                    })
+                    result = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     save_session(result)
-                    st.success("Logged in.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Login failed: {e}")
-
-    with tab2:
-        signup_email = st.text_input("Email ", key="signup_email")
-        signup_password = st.text_input("Password ", type="password", key="signup_password")
-
-        if st.button("Create account", key="signup_btn", use_container_width=True):
-            if not signup_email or not signup_password:
-                st.warning("Enter your email and password.")
-            else:
+        with t2:
+            email = st.text_input("Email ", key="signup_email")
+            password = st.text_input("Password ", type="password", key="signup_password")
+            if st.button("Create account", use_container_width=True):
                 try:
-                    result = supabase.auth.sign_up({
-                        "email": signup_email,
-                        "password": signup_password,
-                    })
-                    if getattr(result, "session", None) and getattr(result, "user", None):
+                    result = supabase.auth.sign_up({"email": email, "password": password})
+                    if getattr(result, "session", None):
                         save_session(result)
-                        st.success("Account created and logged in.")
                         st.rerun()
                     else:
-                        st.success("Account created. Check your email if confirmation is enabled.")
+                        st.success("Account created. Check your email if Supabase confirmation is enabled.")
                 except Exception as e:
                     st.error(f"Sign up failed: {e}")
 
+def fetch_one(table, filters):
+    q = supabase.table(table).select("*")
+    for col, value in filters.items():
+        q = q.eq(col, value)
+    r = q.limit(1).execute()
+    return r.data[0] if r.data else None
 
-# ---------------------------
-# Tasks
-# ---------------------------
-def fetch_tasks():
-    response = (
-        supabase.table("tasks")
+def get_program(user_id):
+    r = (
+        supabase.table("lockin_programs")
         .select("*")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return r.data[0] if r.data else None
+
+def create_program(user_id, start_date, goal):
+    supabase.table("lockin_programs").insert({
+        "user_id": user_id,
+        "start_date": str(start_date),
+        "end_date": str(start_date + timedelta(days=89)),
+        "goal": goal.strip(),
+        "status": "active",
+    }).execute()
+
+def get_daily_log(user_id, log_date):
+    return fetch_one("daily_lockin", {"user_id": user_id, "log_date": str(log_date)})
+
+def upsert_daily_log(user_id, log_date, values):
+    existing = get_daily_log(user_id, log_date)
+    payload = {
+        "user_id": user_id,
+        "log_date": str(log_date),
+        **values,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if existing:
+        supabase.table("daily_lockin").update(payload).eq("id", existing["id"]).execute()
+    else:
+        supabase.table("daily_lockin").insert(payload).execute()
+
+def get_daily_logs(user_id):
+    r = (
+        supabase.table("daily_lockin")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("log_date", desc=False)
+        .execute()
+    )
+    return r.data or []
+
+def get_tasks(user_id):
+    r = (
+        supabase.table("lockin_tasks")
+        .select("*")
+        .eq("user_id", user_id)
         .order("completed", desc=False)
         .order("task_date", desc=False)
         .order("task_time", desc=False)
         .execute()
     )
-    return response.data if response.data else []
+    return r.data or []
 
-
-def add_task(title, notes, priority, task_date, task_time, is_work, is_personal):
-    user = get_current_user()
-    user_id = user.id if user else None
-
-    payload = {
+def add_task(user_id, title, notes, priority, task_date, task_time, category):
+    supabase.table("lockin_tasks").insert({
+        "user_id": user_id,
         "title": title,
         "notes": notes,
         "priority": priority,
         "task_date": str(task_date),
         "task_time": str(task_time) if task_time else None,
-        "is_work": is_work,
-        "is_personal": is_personal,
+        "category": category,
         "completed": False,
-        "user_id": user_id,
-    }
-    supabase.table("tasks").insert(payload).execute()
+    }).execute()
 
-
-def mark_complete(task_id, completed_value):
-    (
-        supabase.table("tasks")
-        .update({"completed": completed_value})
-        .eq("id", task_id)
-        .execute()
-    )
-
-
-def delete_task(task_id):
-    supabase.table("tasks").delete().eq("id", task_id).execute()
-
-
-# ---------------------------
-# Dashboard notes
-# ---------------------------
-def fetch_notes():
-    response = (
-        supabase.table("notes")
+def get_workouts(user_id):
+    r = (
+        supabase.table("workouts")
         .select("*")
-        .order("created_at", desc=True)
+        .eq("user_id", user_id)
+        .order("workout_date", desc=True)
+        .limit(100)
         .execute()
     )
-    return response.data if response.data else []
+    return r.data or []
 
+def get_focus_sessions(user_id):
+    r = (
+        supabase.table("focus_sessions")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+    return r.data or []
 
-def add_note(content):
-    user = get_current_user()
-    user_id = user.id if user else None
+def parse_task_dt(task):
+    d = datetime.strptime(str(task["task_date"]), "%Y-%m-%d").date()
+    if task.get("task_time"):
+        raw = str(task["task_time"])
+        fmt = "%H:%M:%S" if len(raw) >= 8 else "%H:%M"
+        t = datetime.strptime(raw[:8] if fmt == "%H:%M:%S" else raw[:5], fmt).time()
+    else:
+        t = time(9, 0)
+    return datetime.combine(d, t)
 
-    payload = {
-        "content": content,
-        "user_id": user_id,
-    }
-    supabase.table("notes").insert(payload).execute()
-
-
-def delete_note(note_id):
-    supabase.table("notes").delete().eq("id", note_id).execute()
-
-
-# ---------------------------
-# App start
-# ---------------------------
-init_auth_state()
-try_restore_session()
-
-st.markdown(
-    """
-    <style>
-    .logo-wrap {
-        display:flex;
-        align-items:center;
-        gap:12px;
-        margin-bottom: 10px;
-    }
-    .logo-badge {
-        width:56px;
-        height:56px;
-        border-radius:16px;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        font-size:28px;
-        background: linear-gradient(135deg, #fff2b3, #ffd166);
-        border:1px solid #f3cf55;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    }
-    .logo-title {
-        font-size: 1.9rem;
-        font-weight: 700;
-        line-height: 1.1;
-    }
-    .logo-subtitle {
-        color: #6b7280;
-        font-size: 0.95rem;
-    }
-    .small-muted {
-        font-size: 0.85rem;
-        color: #6b7280;
-    }
-    .note-card {
-        background: #fff8c7;
-        color: #111827;
-        border: 1px solid #f0de73;
-        border-radius: 12px;
-        padding: 14px;
-        min-height: 120px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-        white-space: pre-wrap;
-        overflow-wrap: break-word;
-    }
-    .login-card {
-        max-width: 560px;
-        margin: 0 auto;
-        padding-top: 10px;
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 1.2rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Logo / top header
-header_left, header_right = st.columns([4, 1])
-with header_left:
-    st.markdown(
-        """
-        <div class="logo-wrap">
-            <div class="logo-badge">🗂️</div>
-            <div>
-                <div class="logo-title">Lets Do Eat</div>
-                <div class="logo-subtitle">Tasks, dashboard notes, and calendar routing in one place.</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+def google_calendar_url(task):
+    start = parse_task_dt(task)
+    end = start + timedelta(minutes=60)
+    return (
+        "https://calendar.google.com/calendar/render?action=TEMPLATE"
+        f"&text={quote(task['title'])}"
+        f"&dates={start.strftime('%Y%m%dT%H%M%S')}/{end.strftime('%Y%m%dT%H%M%S')}"
+        f"&details={quote(task.get('notes') or '')}"
     )
 
-with header_right:
-    if st.session_state.user_email:
-        st.caption(f"Signed in as: {st.session_state.user_email}")
-        if st.button("Logout", use_container_width=True):
+def outlook_calendar_url(task):
+    start = parse_task_dt(task)
+    end = start + timedelta(minutes=60)
+    return (
+        "https://outlook.office.com/calendar/0/deeplink/compose?path=/calendar/action/compose"
+        f"&subject={quote(task['title'])}"
+        f"&body={quote(task.get('notes') or '')}"
+        f"&startdt={quote(start.isoformat())}"
+        f"&enddt={quote(end.isoformat())}"
+    )
+
+def ics_content(task):
+    start = parse_task_dt(task)
+    end = start + timedelta(minutes=60)
+    title = (task["title"] or "").replace("\n", " ")
+    notes = (task.get("notes") or "").replace("\n", "\\n")
+    return f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//LOCK IN 90//EN
+BEGIN:VEVENT
+SUMMARY:{title}
+DESCRIPTION:{notes}
+DTSTART:{start.strftime('%Y%m%dT%H%M%S')}
+DTEND:{end.strftime('%Y%m%dT%H%M%S')}
+END:VEVENT
+END:VCALENDAR
+"""
+
+def score_log(log):
+    if not log:
+        return 0, 11
+    checks = [
+        bool(log.get("wake_by_8")),
+        bool(log.get("lunch_cardio")),
+        bool(log.get("evening_training")),
+        bool(log.get("cooked")),
+        bool(log.get("calorie_target_hit")),
+        bool(log.get("protein_target_hit")),
+        int(log.get("study_minutes") or 0) >= 60,
+        int(log.get("business_minutes") or 0) >= 45,
+        int(log.get("art_minutes") or 0) >= 30,
+        bool(log.get("room_tidy")),
+        bool(log.get("bed_by_23")),
+    ]
+    return sum(checks), len(checks)
+
+def streak(logs):
+    lookup = {date.fromisoformat(x["log_date"]): x for x in logs}
+    d = date.today()
+    value = 0
+    while d in lookup:
+        complete, total = score_log(lookup[d])
+        if complete / total < 0.80:
+            break
+        value += 1
+        d -= timedelta(days=1)
+    return value
+
+def top_nav():
+    pages = [("Today", "⌂"), ("Training", "◫"), ("Focus", "◉"), ("Tasks", "✓"), ("Progress", "↗")]
+    cols = st.columns(len(pages))
+    for col, (label, icon) in zip(cols, pages):
+        with col:
+            if st.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True):
+                st.session_state.active_page = label
+                st.rerun()
+
+def render_today(user_id):
+    program = get_program(user_id)
+    if not program:
+        st.markdown("""
+        <section class="hero-card">
+          <div>
+            <div class="eyebrow">YOUR NEXT 90 DAYS</div>
+            <h1>START THE SYSTEM.</h1>
+            <p>Make Day 1 deliberate. The app will calculate the rest.</p>
+          </div>
+          <div class="hero-illustration">90</div>
+        </section>
+        """, unsafe_allow_html=True)
+        with st.container(border=True):
+            start_date = st.date_input("Day 1", value=date.today())
+            goal = st.text_area("Main goal", placeholder="Build discipline, train consistently, study, grow my business...")
+            if st.button("Start my 90 days", type="primary", use_container_width=True):
+                create_program(user_id, start_date, goal)
+                st.rerun()
+        return
+
+    start = date.fromisoformat(program["start_date"])
+    end = date.fromisoformat(program["end_date"])
+    raw_day = (date.today() - start).days + 1
+    day_no = max(1, min(90, raw_day))
+    pct = max(0, min(100, round(raw_day / 90 * 100)))
+    log = get_daily_log(user_id, date.today()) or {}
+    logs = get_daily_logs(user_id)
+    done, total = score_log(log)
+
+    st.markdown(f"""
+    <section class="hero-card">
+      <div>
+        <div class="eyebrow">LOCK IN 90</div>
+        <h1>DAY {day_no}<span> / 90</span></h1>
+        <p>{program.get("goal") or "Follow the plan. No daily negotiation."}</p>
+      </div>
+      <div class="hero-illustration">{pct}%</div>
+    </section>
+    """, unsafe_allow_html=True)
+    st.progress(pct / 100)
+
+    a, b, c, d = st.columns(4)
+    a.metric("🔥 Streak", f"{streak(logs)} days")
+    b.metric("✅ Today", f"{done}/{total}")
+    c.metric("😴 Sleep", f"{float(log.get('sleep_hours') or 0):.1f}h")
+    d.metric("🏁 Ends", end.strftime("%d %b"))
+
+    st.markdown('<div class="section-title">Today</div>', unsafe_allow_html=True)
+    with st.form("today_checklist"):
+        l, r = st.columns(2, gap="large")
+        with l:
+            wake = st.checkbox("Wake by 08:00", value=bool(log.get("wake_by_8")))
+            cardio = st.checkbox("Lunch cardio / movement", value=bool(log.get("lunch_cardio")))
+            weights = st.checkbox("Evening weights / programmed recovery", value=bool(log.get("evening_training")))
+            cooked = st.checkbox("Cook / planned meal", value=bool(log.get("cooked")))
+            room = st.checkbox("15-minute room reset", value=bool(log.get("room_tidy")))
+            bed = st.checkbox("In bed by 23:00", value=bool(log.get("bed_by_23")))
+        with r:
+            cal = st.checkbox("Calories on target", value=bool(log.get("calorie_target_hit")))
+            protein = st.checkbox("Protein on target", value=bool(log.get("protein_target_hit")))
+            study = st.number_input("Study minutes", 0, 600, int(log.get("study_minutes") or 0), 5)
+            business = st.number_input("Business minutes", 0, 600, int(log.get("business_minutes") or 0), 5)
+            art = st.number_input("Art minutes", 0, 600, int(log.get("art_minutes") or 0), 5)
+            sleep = st.number_input("Sleep hours", 0.0, 14.0, float(log.get("sleep_hours") or 0), 0.25)
+        notes = st.text_area("Notes", value=log.get("notes") or "", placeholder="What worked? What needs fixing tomorrow?")
+        if st.form_submit_button("Save today", type="primary", use_container_width=True):
+            upsert_daily_log(user_id, date.today(), {
+                "wake_by_8": wake,
+                "lunch_cardio": cardio,
+                "evening_training": weights,
+                "cooked": cooked,
+                "calorie_target_hit": cal,
+                "protein_target_hit": protein,
+                "study_minutes": study,
+                "business_minutes": business,
+                "art_minutes": art,
+                "room_tidy": room,
+                "bed_by_23": bed,
+                "sleep_hours": sleep,
+                "notes": notes,
+            })
+            st.success("Saved.")
+            st.rerun()
+
+    st.markdown('<div class="section-title">Weekday rhythm</div>', unsafe_allow_html=True)
+    rhythm = [
+        ("08:00", "Wake + breakfast"),
+        ("09:00–17:15", "Work"),
+        ("Lunch", "20–30 min cardio / movement"),
+        ("After work", "Weight training on programmed days"),
+        ("18:30", "Home + cook"),
+        ("19:30", "Study — 60 min"),
+        ("20:45", "Business — 45 min"),
+        ("21:30", "Art — 30 min"),
+        ("22:00", "Room reset + prepare tomorrow"),
+        ("23:00", "Bed"),
+    ]
+    for t, item in rhythm:
+        st.markdown(f'<div class="timeline"><span>{t}</span><strong>{item}</strong></div>', unsafe_allow_html=True)
+
+def render_training(user_id):
+    st.markdown('<div class="section-title">Training</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="banner-photo training-banner">
+      <div><div class="eyebrow">TWO-A-DAY STRUCTURE</div><h2>Condition at lunch.<br>Build after work.</h2></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    plan = [
+        ("MON", "20–30 min cardio", "Upper body"),
+        ("TUE", "20–30 min cardio", "Lower body"),
+        ("WED", "Easy walk / zone 2", "Recovery"),
+        ("THU", "20–30 min cardio", "Upper body"),
+        ("FRI", "20–30 min cardio", "Lower body"),
+        ("SAT", "Optional activity", "Optional accessories / full body"),
+        ("SUN", "Rest", "Rest"),
+    ]
+    for day, lunch, evening in plan:
+        st.markdown(f"""
+        <div class="workout-row">
+          <div class="day-pill">{day}</div>
+          <div><span>LUNCH</span><strong>{lunch}</strong></div>
+          <div><span>EVENING</span><strong>{evening}</strong></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with st.expander("Log a workout", expanded=True):
+        with st.form("workout_log"):
+            a, b = st.columns(2)
+            with a:
+                d = st.date_input("Date", value=date.today())
+                session = st.selectbox("Session", ["Lunch cardio", "Upper body", "Lower body", "Full body", "Recovery", "Other"])
+                duration = st.number_input("Duration (minutes)", 0, 300, 45, 5)
+            with b:
+                exercise = st.text_input("Exercise / activity")
+                sets = st.number_input("Sets", 0, 20, 0)
+                reps = st.number_input("Reps", 0, 200, 0)
+                weight = st.number_input("Weight", 0.0, 500.0, 0.0, 0.5)
+            notes = st.text_area("Workout notes")
+            if st.form_submit_button("Save workout", type="primary", use_container_width=True):
+                supabase.table("workouts").insert({
+                    "user_id": user_id,
+                    "workout_date": str(d),
+                    "session": session,
+                    "exercise": exercise,
+                    "sets": sets,
+                    "reps": reps,
+                    "weight": weight,
+                    "duration_minutes": duration,
+                    "notes": notes,
+                }).execute()
+                st.rerun()
+
+    workouts = get_workouts(user_id)
+    if workouts:
+        df = pd.DataFrame(workouts)
+        cols = [c for c in ["workout_date", "session", "exercise", "sets", "reps", "weight", "duration_minutes"] if c in df.columns]
+        st.dataframe(df[cols], use_container_width=True, hide_index=True)
+
+def render_focus(user_id):
+    st.markdown('<div class="section-title">Focus</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="banner-photo focus-banner">
+      <div><div class="eyebrow">AFTER WORK</div><h2>Study first.<br>Then build.</h2></div>
+    </div>
+    """, unsafe_allow_html=True)
+    a, b, c, d = st.columns(4)
+    a.metric("Study", "60 min")
+    b.metric("Business", "45 min")
+    c.metric("Art", "30 min")
+    d.metric("Room", "15 min")
+
+    with st.form("focus_log"):
+        kind = st.selectbox("Focus type", ["Study", "Business", "Art", "Room reset"])
+        mins = st.number_input("Minutes completed", 0, 300, 30, 5)
+        note = st.text_input("Optional note")
+        if st.form_submit_button("Save focus block", type="primary", use_container_width=True):
+            supabase.table("focus_sessions").insert({
+                "user_id": user_id,
+                "session_date": str(date.today()),
+                "focus_type": kind,
+                "minutes": mins,
+                "note": note,
+            }).execute()
+            st.rerun()
+
+    sessions = get_focus_sessions(user_id)
+    if sessions:
+        st.dataframe(pd.DataFrame(sessions), use_container_width=True, hide_index=True)
+
+def render_tasks(user_id):
+    st.markdown('<div class="section-title">Tasks + Calendar</div>', unsafe_allow_html=True)
+    st.caption("Create once, then send the task to Google, Outlook, or Apple Calendar.")
+
+    with st.expander("Add task", expanded=True):
+        with st.form("task_form"):
+            a, b = st.columns([1.4, 1])
+            with a:
+                title = st.text_input("Task title")
+                notes = st.text_area("Notes")
+            with b:
+                priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
+                d = st.date_input("Date", value=date.today())
+                use_time = st.checkbox("Add time")
+                t = st.time_input("Time", value=time(9, 0), disabled=not use_time)
+                category = st.selectbox("Category", ["Personal", "Work", "Study", "Business", "Gym", "Other"])
+            if st.form_submit_button("Save task", type="primary", use_container_width=True):
+                if title.strip():
+                    add_task(user_id, title.strip(), notes.strip(), priority, d, t if use_time else None, category)
+                    st.rerun()
+
+    tasks = get_tasks(user_id)
+    if not tasks:
+        st.info("No tasks yet.")
+        return
+
+    q = st.text_input("Search", placeholder="Search title or notes")
+    if q.strip():
+        ql = q.lower().strip()
+        tasks = [x for x in tasks if ql in (x.get("title") or "").lower() or ql in (x.get("notes") or "").lower()]
+
+    for task in tasks:
+        with st.container(border=True):
+            left, right = st.columns([3, 1])
+            with left:
+                icon = "✅" if task.get("completed") else "○"
+                st.markdown(f"### {icon} {task['title']}")
+                tm = f" · {str(task['task_time'])[:5]}" if task.get("task_time") else ""
+                st.caption(f"{task['priority']} · {task['category']} · {task['task_date']}{tm}")
+                if task.get("notes"):
+                    st.write(task["notes"])
+            with right:
+                if st.button("Undo" if task.get("completed") else "Done", key=f"done_{task['id']}", use_container_width=True):
+                    supabase.table("lockin_tasks").update({"completed": not task.get("completed")}).eq("id", task["id"]).execute()
+                    st.rerun()
+                if st.button("Delete", key=f"delete_{task['id']}", use_container_width=True):
+                    supabase.table("lockin_tasks").delete().eq("id", task["id"]).execute()
+                    st.rerun()
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.link_button("Google Calendar", google_calendar_url(task), use_container_width=True)
+            with c2:
+                st.link_button("Outlook", outlook_calendar_url(task), use_container_width=True)
+            with c3:
+                st.download_button(
+                    "Apple / ICS",
+                    ics_content(task),
+                    file_name=f"{task['title'].replace(' ', '_')}.ics",
+                    mime="text/calendar",
+                    use_container_width=True,
+                    key=f"ics_{task['id']}",
+                )
+
+def render_progress(user_id):
+    st.markdown('<div class="section-title">Progress</div>', unsafe_allow_html=True)
+    logs = get_daily_logs(user_id)
+    workouts = get_workouts(user_id)
+    if not logs:
+        st.info("Your charts appear after you start saving days.")
+        return
+
+    rows = []
+    for x in logs:
+        done, total = score_log(x)
+        rows.append({
+            "date": x["log_date"],
+            "completion": round(done / total * 100),
+            "study": int(x.get("study_minutes") or 0),
+            "business": int(x.get("business_minutes") or 0),
+            "art": int(x.get("art_minutes") or 0),
+            "sleep": float(x.get("sleep_hours") or 0),
+        })
+    df = pd.DataFrame(rows)
+    a, b, c = st.columns(3)
+    a.metric("Days logged", len(df))
+    b.metric("Workouts", len(workouts))
+    c.metric("Average score", f"{round(df['completion'].mean())}%")
+
+    st.markdown("#### Consistency")
+    st.line_chart(df.set_index("date")["completion"])
+    st.markdown("#### Focus")
+    st.bar_chart(df.set_index("date")[["study", "business", "art"]])
+    st.markdown("#### Sleep")
+    st.line_chart(df.set_index("date")["sleep"])
+
+init_state()
+restore_session()
+
+if AUTH_REQUIRED and not st.session_state.user_email:
+    show_auth_screen()
+    st.stop()
+
+user_id = current_user_id()
+if not user_id:
+    st.error(
+        "No profile is configured. In private/no-login mode, add PUBLIC_PROFILE_ID to Streamlit secrets. "
+        "Or set AUTH_REQUIRED=true and use Supabase login."
+    )
+    st.stop()
+
+head_l, head_r = st.columns([4, 1])
+with head_l:
+    st.markdown("""
+    <div class="brand">
+      <div class="brand-mark">L90</div>
+      <div><strong>LOCK IN 90</strong><span>personal operating system</span></div>
+    </div>
+    """, unsafe_allow_html=True)
+with head_r:
+    if AUTH_REQUIRED:
+        if st.button("Log out", use_container_width=True):
             try:
                 supabase.auth.sign_out()
             except Exception:
                 pass
             clear_session()
             st.rerun()
-
-if not st.session_state.user_email:
-    with st.container():
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
-        show_auth_screen()
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()
-
-
-# Top add areas
-top_action_1, top_action_2 = st.columns(2)
-
-with top_action_1:
-    with st.expander("➕ Add task", expanded=False):
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            title = st.text_input("Task title", placeholder="Example: Finish notes, Gym, Review tickets")
-            task_notes = st.text_area("Task note", placeholder="Optional details related to this task...", height=90)
-
-        with col2:
-            priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
-            task_date = st.date_input("Date", value=date.today())
-            use_time = st.checkbox("Add time", value=False)
-            task_time = st.time_input("Time", value=time(9, 0), disabled=not use_time)
-            tag_options = st.multiselect("Tag this task as", ["Work", "Personal"], default=["Personal"])
-
-        if st.button("Save task", type="primary", use_container_width=True):
-            if not title.strip():
-                st.warning("Please enter a task title.")
-            elif len(tag_options) == 0:
-                st.warning("Pick at least one tag: Work or Personal.")
-            else:
-                add_task(
-                    title=title.strip(),
-                    notes=task_notes.strip(),
-                    priority=priority,
-                    task_date=task_date,
-                    task_time=task_time if use_time else None,
-                    is_work="Work" in tag_options,
-                    is_personal="Personal" in tag_options,
-                )
-                st.success("Task added.")
-                st.rerun()
-
-with top_action_2:
-    with st.expander("📝 Add dashboard note", expanded=False):
-        note_content = st.text_area(
-            "Quick dashboard note",
-            placeholder="Reminder, thought, quick todo, idea...",
-            height=120,
-        )
-        if st.button("Save note", key="save_dash_note", use_container_width=True):
-            if not note_content.strip():
-                st.warning("Please write something in the note.")
-            else:
-                add_note(note_content.strip())
-                st.success("Note added.")
-                st.rerun()
-
-
-# Load data
-tasks = fetch_tasks()
-notes_data = fetch_notes()
-df = pd.DataFrame(tasks)
-
-if not df.empty:
-    df["task_date"] = pd.to_datetime(df["task_date"]).dt.date
-    df["tag_label"] = df.apply(
-        lambda row: "Both" if row["is_work"] and row["is_personal"]
-        else "Work" if row["is_work"]
-        else "Personal",
-        axis=1
-    )
-    today = date.today()
-    df["is_overdue"] = (df["task_date"] < today) & (~df["completed"])
-    priority_order = {"High": 0, "Medium": 1, "Low": 2}
-    df["priority_sort"] = df["priority"].map(priority_order).fillna(9)
-else:
-    today = date.today()
-
-# Metrics
-if not df.empty:
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("Total", int(len(df)))
-    m2.metric("Done", int(df["completed"].sum()))
-    m3.metric("Pending", int((~df["completed"]).sum()))
-    m4.metric("Overdue", int(df["is_overdue"].sum()))
-    m5.metric("High", int((df["priority"] == "High").sum()))
-    m6.metric("Today", int((df["task_date"] == today).sum()))
-else:
-    st.info("No tasks yet. Add your first task above.")
-
-# Dashboard notes at top only
-st.subheader("Dashboard Notes")
-
-if not notes_data:
-    st.info("No dashboard notes yet.")
-else:
-    note_columns = st.columns(3)
-    for index, note in enumerate(notes_data):
-        col = note_columns[index % 3]
-        with col:
-            st.markdown(
-                f"<div class='note-card'>{safe_str(note['content'])}</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("Delete", key=f"delete_note_{note['id']}", use_container_width=True):
-                delete_note(note["id"])
-                st.rerun()
-
-st.divider()
-
-# Tasks section
-filtered_df = df.copy() if not df.empty else pd.DataFrame()
-
-if not df.empty:
-    st.subheader("Tasks")
-
-    with st.container(border=True):
-        f1, f2, f3, f4, f5, f6 = st.columns([2, 1, 1, 1, 1, 1])
-
-        with f1:
-            search_text = st.text_input("Search", placeholder="Search title or task notes", label_visibility="collapsed")
-            st.caption("Search")
-
-        with f2:
-            selected_date = st.date_input("Date", value=None, label_visibility="collapsed")
-            st.caption("Date")
-
-        with f3:
-            tag_filter = st.selectbox("Tag", ["All", "Work", "Personal", "Both"], label_visibility="collapsed")
-            st.caption("Tag")
-
-        with f4:
-            status_filter = st.selectbox("Status", ["All", "Pending", "Completed", "Overdue"], label_visibility="collapsed")
-            st.caption("Status")
-
-        with f5:
-            sort_by = st.selectbox("Sort", ["Due date", "Priority", "Newest first"], label_visibility="collapsed")
-            st.caption("Sort")
-
-        with f6:
-            hide_completed = st.checkbox("Hide done", value=False)
-
-    quick1, quick2, quick3, quick4 = st.columns(4)
-    with quick1:
-        if st.button("Today only", use_container_width=True):
-            st.session_state["quick_filter"] = "today"
-    with quick2:
-        if st.button("High priority", use_container_width=True):
-            st.session_state["quick_filter"] = "high"
-    with quick3:
-        if st.button("Overdue", use_container_width=True):
-            st.session_state["quick_filter"] = "overdue"
-    with quick4:
-        if st.button("Clear quick filter", use_container_width=True):
-            st.session_state["quick_filter"] = "all"
-
-    quick_filter = st.session_state.get("quick_filter", "all")
-
-    if search_text.strip():
-        search_value = search_text.strip().lower()
-        filtered_df = filtered_df[
-            filtered_df["title"].str.lower().str.contains(search_value, na=False)
-            | filtered_df["notes"].fillna("").str.lower().str.contains(search_value, na=False)
-        ]
-
-    if selected_date:
-        filtered_df = filtered_df[filtered_df["task_date"] == selected_date]
-
-    if tag_filter != "All":
-        filtered_df = filtered_df[filtered_df["tag_label"] == tag_filter]
-
-    if status_filter == "Pending":
-        filtered_df = filtered_df[filtered_df["completed"] == False]
-    elif status_filter == "Completed":
-        filtered_df = filtered_df[filtered_df["completed"] == True]
-    elif status_filter == "Overdue":
-        filtered_df = filtered_df[filtered_df["is_overdue"] == True]
-
-    if hide_completed:
-        filtered_df = filtered_df[filtered_df["completed"] == False]
-
-    if quick_filter == "today":
-        filtered_df = filtered_df[filtered_df["task_date"] == today]
-    elif quick_filter == "high":
-        filtered_df = filtered_df[filtered_df["priority"] == "High"]
-    elif quick_filter == "overdue":
-        filtered_df = filtered_df[filtered_df["is_overdue"] == True]
-
-    if sort_by == "Due date":
-        filtered_df = filtered_df.sort_values(by=["completed", "task_date", "priority_sort"])
-    elif sort_by == "Priority":
-        filtered_df = filtered_df.sort_values(by=["completed", "priority_sort", "task_date"])
-    elif sort_by == "Newest first":
-        filtered_df = filtered_df.sort_values(by=["created_at"], ascending=False)
-
-    with st.expander("📅 Calendar quick jump", expanded=False):
-        calendar_date = st.date_input("Click a date", value=today, key="calendar_jump")
-        if st.button("Show tasks for this date", use_container_width=True):
-            filtered_df = filtered_df[filtered_df["task_date"] == calendar_date]
-
-    st.caption(f"Showing {len(filtered_df)} task(s)")
-
-    if filtered_df.empty:
-        st.info("No tasks match your filters.")
     else:
-        for _, row in filtered_df.iterrows():
-            status_icon = "✅" if row["completed"] else "⏳"
-            overdue_text = " • OVERDUE" if row["is_overdue"] else ""
+        st.caption("Private mode")
 
-            with st.container(border=True):
-                top_left, top_right = st.columns([5, 2])
+top_nav()
 
-                with top_left:
-                    st.markdown(f"**{status_icon} {row['title']}**")
-                    when_text = f"{row['task_date']}"
-                    if row["task_time"] and row["task_time"] != "None":
-                        when_text += f" at {str(row['task_time'])[:5]}"
-
-                    st.markdown(
-                        f"<div class='small-muted'>"
-                        f"{row['priority']} • {row['tag_label']} • {when_text}{overdue_text}"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    if safe_str(row["notes"]).strip():
-                        with st.expander("Task note"):
-                            st.write(row["notes"])
-
-                with top_right:
-                    c1, c2 = st.columns(2)
-
-                    with c1:
-                        if st.button(
-                            "Undo" if row["completed"] else "Done",
-                            key=f"complete_{row['id']}",
-                            use_container_width=True,
-                        ):
-                            mark_complete(row["id"], not row["completed"])
-                            st.rerun()
-
-                    with c2:
-                        if st.button("Delete", key=f"delete_{row['id']}", use_container_width=True):
-                            delete_task(row["id"])
-                            st.rerun()
-
-                    task_payload = {
-                        "title": row["title"],
-                        "notes": row["notes"],
-                        "task_date": row["task_date"].strftime("%Y-%m-%d"),
-                        "task_time": None if pd.isna(row["task_time"]) else str(row["task_time"]),
-                    }
-
-                    with st.expander("Calendar options"):
-                        ics_content = create_ics_content(task_payload)
-
-                        st.download_button(
-                            "Apple Calendar",
-                            data=ics_content,
-                            file_name=f"{row['title']}.ics",
-                            mime="text/calendar",
-                            key=f"apple_{row['id']}",
-                            use_container_width=True,
-                        )
-
-                        st.link_button(
-                            "Google Calendar",
-                            build_google_calendar_url(task_payload),
-                            use_container_width=True,
-                        )
-
-                        st.link_button(
-                            "Work Calendar",
-                            build_outlook_calendar_url(task_payload),
-                            use_container_width=True,
-                        )
-else:
-    st.subheader("Tasks")
-    st.info("No tasks yet.")
+page = st.session_state.active_page
+if page == "Today":
+    render_today(user_id)
+elif page == "Training":
+    render_training(user_id)
+elif page == "Focus":
+    render_focus(user_id)
+elif page == "Tasks":
+    render_tasks(user_id)
+elif page == "Progress":
+    render_progress(user_id)
