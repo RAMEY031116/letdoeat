@@ -1,67 +1,47 @@
 
-# LOCK IN 90
+# Lock In 90 — rebuilt version
 
-A mobile-first Streamlit + Supabase app built around a 90-day lock-in programme.
+This is a clean rebuild of the app.
 
-## Features
-- Day X / 90 dashboard
-- daily lock-in checklist
-- sleep, study, business, art, room reset
-- calories / protein target checks
-- lunch cardio + evening weight-training structure
-- workout logging
-- focus-session logging
-- tasks and priorities
-- Google Calendar links
-- Outlook Calendar links
-- Apple / ICS downloads
-- progress charts
-- optional Supabase authentication
+## What is fixed
+- Focus target values are NOT Streamlit metrics anymore.
+- `60 min`, `45 min`, `30 min`, `15 min` are custom HTML with explicit dark text.
+- Cleaner mobile layout.
+- More consistent button/input contrast.
+- Better Today, Training, Focus, Tasks, and Progress sections.
+- Focus timer added.
+- Calories/protein actual values + targets added.
+- Quick notes added.
+- Existing calendar functionality retained.
 
-## Setup
+## Supabase
+Run `schema_v2.sql` in Supabase SQL Editor.
 
-### 1. Create tables
-Run `schema.sql` in Supabase SQL Editor.
+It is safe to run if you already ran the earlier schema:
+- it uses `create table if not exists`
+- it uses `add column if not exists`
+- it does not delete your existing Lock In data
 
-This creates new tables. It does not change your old Lets Do Eat tables.
+Do NOT run `enable_auth_rls.sql` while you are still using private/no-login mode.
 
-### 2. Private / no-login mode
-Use this while it is only for you.
-
-Copy `.streamlit/secrets.example.toml` to `.streamlit/secrets.toml` and add your real values:
+## Streamlit secrets
+Use your real Supabase URL and publishable key.
 
 ```toml
-SUPABASE_URL = "..."
-SUPABASE_KEY = "..."
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_KEY = "your-publishable-key"
 AUTH_REQUIRED = "false"
-PUBLIC_PROFILE_ID = "a-random-uuid"
+PUBLIC_PROFILE_ID = "your-existing-public-profile-id"
 ```
 
-Important: no-login mode has RLS disabled, so do not publicly share the deployed app.
+Keep the SAME PUBLIC_PROFILE_ID you are already using so the new version continues to see your existing data.
 
-### 3. Multi-user mode later
-Before sharing with friends:
+## GitHub
+Replace the old app files with:
+- `app.py`
+- `style.css`
+- `requirements.txt`
 
-1. Run `enable_auth_rls.sql` in Supabase.
-2. Set:
+Then run `schema_v2.sql` once in Supabase.
 
-```toml
-AUTH_REQUIRED = "true"
-```
-
-3. Remove `PUBLIC_PROFILE_ID`.
-
-Then each person signs up and only sees their own data.
-
-### 4. Run locally
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-### 5. Deploy
-Push the folder to a new GitHub repo, for example `lockin90`, then deploy it on Streamlit Community Cloud and add the same secrets there.
-
-### Mobile
-Open the deployed URL on your phone and use Add to Home Screen.
+You do not need to change your existing Streamlit secrets if they already work.
