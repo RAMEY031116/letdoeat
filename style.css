@@ -292,3 +292,14 @@ label,[data-testid="stWidgetLabel"] p,[data-testid="stCheckbox"] label p{color:#
   [data-testid="stHorizontalBlock"]{gap:.26rem!important}
   .login-orb{display:none}
 }
+
+
+/* V4 shared-data polish */
+.synced-note{
+  background:#fff;border:1px solid var(--line);border-radius:16px;
+  padding:12px 14px;color:#7b828b!important;font-size:.75rem;
+}
+.task-range{
+  font-variant-numeric:tabular-nums;
+  font-weight:850;
+}

@@ -277,7 +277,16 @@ def get_tasks(user_id):
     )
     return response.data or []
 
-def add_task(user_id, title, notes, priority, task_date, task_time, category):
+def add_task(
+    user_id,
+    title,
+    notes,
+    priority,
+    task_date,
+    task_time,
+    task_end_time,
+    category,
+):
     supabase.table("lockin_tasks").insert(
         {
             "user_id": user_id,
@@ -286,6 +295,7 @@ def add_task(user_id, title, notes, priority, task_date, task_time, category):
             "priority": priority,
             "task_date": str(task_date),
             "task_time": str(task_time) if task_time else None,
+            "task_end_time": str(task_end_time) if task_end_time else None,
             "category": category,
             "completed": False,
         }
@@ -312,6 +322,43 @@ def get_focus_sessions(user_id):
         .execute()
     )
     return response.data or []
+
+def get_body_weights(user_id):
+    response = (
+        supabase.table("body_weights")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("log_date", desc=False)
+        .execute()
+    )
+    return response.data or []
+
+def save_body_weight(user_id, log_date, weight_kg):
+    existing = first_row(
+        "body_weights",
+        {
+            "user_id": user_id,
+            "log_date": str(log_date),
+        },
+    )
+
+    payload = {
+        "user_id": user_id,
+        "log_date": str(log_date),
+        "weight_kg": float(weight_kg),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    if existing:
+        (
+            supabase.table("body_weights")
+            .update(payload)
+            .eq("id", existing["id"])
+            .eq("user_id", user_id)
+            .execute()
+        )
+    else:
+        supabase.table("body_weights").insert(payload).execute()
 
 def get_inbox(user_id):
     response = (
@@ -360,9 +407,28 @@ def task_start(task):
         task_time = time(9, 0)
     return datetime.combine(task_date, task_time)
 
+def task_end(task):
+    start = task_start(task)
+    raw = task.get("task_end_time")
+
+    if not raw:
+        return start + timedelta(minutes=30)
+
+    try:
+        end_time = datetime.strptime(str(raw)[:8], "%H:%M:%S").time()
+    except ValueError:
+        end_time = datetime.strptime(str(raw)[:5], "%H:%M").time()
+
+    end = datetime.combine(start.date(), end_time)
+
+    if end <= start:
+        end += timedelta(days=1)
+
+    return end
+
 def google_calendar_url(task):
     start = task_start(task)
-    end = start + timedelta(hours=1)
+    end = task_end(task)
     return (
         "https://calendar.google.com/calendar/render?action=TEMPLATE"
         f"&text={quote(task['title'])}"
@@ -372,7 +438,7 @@ def google_calendar_url(task):
 
 def outlook_calendar_url(task):
     start = task_start(task)
-    end = start + timedelta(hours=1)
+    end = task_end(task)
     return (
         "https://outlook.office.com/calendar/0/deeplink/compose?path=/calendar/action/compose"
         f"&subject={quote(task['title'])}"
@@ -383,7 +449,7 @@ def outlook_calendar_url(task):
 
 def task_ics(task):
     start = task_start(task)
-    end = start + timedelta(hours=1)
+    end = task_end(task)
     title = (task["title"] or "").replace("\n", " ")
     notes = (task.get("notes") or "").replace("\n", "\\n")
     return f"""BEGIN:VCALENDAR
@@ -406,36 +472,62 @@ def target(program, key, default):
     value = program.get(key) if program else None
     return int(value) if value is not None else default
 
-def score_log(log, program):
+def native_daily_score(log, program):
+    """Match the iPhone's 9-part Lockzilla daily score."""
     if not log:
-        return 0, 11
+        return 0
+
+    if log.get("daily_score") is not None:
+        try:
+            return max(0, min(100, int(log.get("daily_score"))))
+        except (TypeError, ValueError):
+            pass
 
     checks = [
         bool(log.get("wake_by_8")),
         bool(log.get("lunch_cardio")),
         bool(log.get("evening_training")),
         bool(log.get("cooked")),
-        bool(log.get("calorie_target_hit")),
-        bool(log.get("protein_target_hit")),
-        int(log.get("study_minutes") or 0) >= target(program, "study_target", 60),
-        int(log.get("business_minutes") or 0) >= target(program, "business_target", 45),
-        int(log.get("art_minutes") or 0) >= target(program, "art_target", 30),
+        int(log.get("study_minutes") or 0) >= 60,
+        int(log.get("business_minutes") or 0) >= 45,
+        int(log.get("art_minutes") or 0) >= 30,
         bool(log.get("room_tidy")),
         bool(log.get("bed_by_23")),
     ]
-    return sum(checks), len(checks)
+
+    return int(sum(checks) / len(checks) * 100)
+
+
+def score_log(log, program):
+    """Compatibility helper for older UI code."""
+    score = native_daily_score(log, program)
+    return score, 100
+
 
 def current_streak(logs, program):
-    lookup = {date.fromisoformat(row["log_date"]): row for row in logs}
+    lookup = {
+        date.fromisoformat(row["log_date"]): row
+        for row in logs
+    }
+
     d = now_local().date()
+
+    # Match the iPhone: if today is not yet a strong day,
+    # continue checking from yesterday.
+    if native_daily_score(lookup.get(d), program) < 70:
+        d -= timedelta(days=1)
+
     value = 0
+
     while d in lookup:
-        done, total = score_log(lookup[d], program)
-        if done / total < 0.80:
+        if native_daily_score(lookup[d], program) < 70:
             break
+
         value += 1
         d -= timedelta(days=1)
+
     return value
+
 
 def next_action(today_log, program):
     current = now_local().time()
@@ -681,8 +773,7 @@ def ninety_day_map(program, logs):
             cls = "future"
             label = "Future"
         elif d in by_date:
-            done, total = score_log(by_date[d], program)
-            pct = round(done / total * 100)
+            pct = native_daily_score(by_date[d], program)
             if pct >= 90:
                 cls = "excellent"
             elif pct >= 75:
@@ -771,8 +862,7 @@ def render_today(user_id):
 
     log = get_daily_log(user_id, today) or {}
     logs = get_logs(user_id)
-    done, total = score_log(log, program)
-    day_pct = round(done / total * 100)
+    day_pct = native_daily_score(log, program)
     next_name, next_detail, next_time, next_category = next_action(log, program)
 
     render_html(
@@ -790,8 +880,8 @@ def render_today(user_id):
 
     stat_grid(
         [
-            ("TODAY", f"{day_pct}%", f"{done}/{total} standards"),
-            ("STREAK", f"{current_streak(logs, program)} days", "80%+ keeps it"),
+            ("TODAY", f"{day_pct}%", "9-part Lockzilla score"),
+            ("STREAK", f"{current_streak(logs, program)} days", "70%+ strong day"),
             ("SLEEP", f"{float(log.get('sleep_hours') or 0):.1f}h", "recovery"),
             ("FINISH", end.strftime("%d %b"), "day 90"),
         ]
@@ -833,6 +923,36 @@ def render_today(user_id):
             )
 
             if st.form_submit_button("Save today", type="primary", use_container_width=True):
+                native_values = {
+                    "wake_by_8": wake,
+                    "lunch_cardio": cardio,
+                    "evening_training": training,
+                    "cooked": cooked,
+                    "study_minutes": study,
+                    "business_minutes": business,
+                    "art_minutes": art,
+                    "room_tidy": room,
+                    "bed_by_23": bed,
+                }
+
+                preview_score = int(
+                    sum(
+                        [
+                            native_values["wake_by_8"],
+                            native_values["lunch_cardio"],
+                            native_values["evening_training"],
+                            native_values["cooked"],
+                            native_values["study_minutes"] >= 60,
+                            native_values["business_minutes"] >= 45,
+                            native_values["art_minutes"] >= 30,
+                            native_values["room_tidy"],
+                            native_values["bed_by_23"],
+                        ]
+                    )
+                    / 9
+                    * 100
+                )
+
                 save_daily_log(
                     user_id,
                     today,
@@ -852,10 +972,56 @@ def render_today(user_id):
                         "bed_by_23": bed,
                         "sleep_hours": sleep_hours,
                         "notes": notes.strip(),
+                        "daily_score": preview_score,
                     },
                 )
                 st.success("Day saved.")
                 st.rerun()
+
+    st.markdown(
+        '<div class="section-head"><span>BODY</span><h2>Body weight</h2></div>',
+        unsafe_allow_html=True,
+    )
+
+    weights = get_body_weights(user_id)
+    latest_weight = weights[-1]["weight_kg"] if weights else None
+    first_weight = weights[0]["weight_kg"] if weights else None
+
+    if latest_weight is not None:
+        change = float(latest_weight) - float(first_weight)
+        stat_grid(
+            [
+                ("CURRENT", f"{float(latest_weight):.1f} kg", "latest"),
+                ("CHANGE", f"{change:+.1f} kg", "since first weigh-in"),
+            ]
+        )
+
+    with st.form("body_weight_form"):
+        weight_date = st.date_input(
+            "Weight date",
+            value=today,
+            key="weight_date",
+        )
+        weight_kg = st.number_input(
+            "Weight (kg)",
+            min_value=20.0,
+            max_value=400.0,
+            value=float(latest_weight or 80.0),
+            step=0.1,
+        )
+
+        if st.form_submit_button(
+            "Save weight",
+            type="primary",
+            use_container_width=True,
+        ):
+            save_body_weight(
+                user_id,
+                weight_date,
+                weight_kg,
+            )
+            st.success("Weight synced.")
+            st.rerun()
 
     st.markdown('<div class="section-head"><span>INBOX</span><h2>Brain dump</h2></div>', unsafe_allow_html=True)
     st.caption("Get it out of your head. Decide what it is later.")
@@ -928,13 +1094,18 @@ def render_focus(user_id):
         note = st.text_input("Optional note")
 
         if st.form_submit_button("Save focus block", type="primary", use_container_width=True):
+            completed_at = now_local()
+
             supabase.table("focus_sessions").insert(
                 {
                     "user_id": user_id,
-                    "session_date": str(now_local().date()),
+                    "session_date": str(completed_at.date()),
                     "focus_type": kind,
                     "minutes": minutes,
                     "note": note.strip(),
+                    "block_title": kind,
+                    "duration_minutes": minutes,
+                    "completed_at": completed_at.isoformat(),
                 }
             ).execute()
 
@@ -967,6 +1138,11 @@ def render_focus(user_id):
             elif kind == "Room reset":
                 values["room_tidy"] = True
 
+            values["daily_score"] = native_daily_score(
+                values,
+                program,
+            )
+
             save_daily_log(user_id, now_local().date(), values)
             st.success("Block logged.")
             st.rerun()
@@ -978,8 +1154,8 @@ def render_focus(user_id):
             blocks.append(
                 (
                     '<div class="history-row">'
-                    f'<div><strong>{safe(s.get("focus_type"))}</strong><span>{safe(s.get("session_date"))}</span></div>'
-                    f'<b>{int(s.get("minutes") or 0)} min</b>'
+                    f'<div><strong>{safe(s.get("focus_type") or s.get("block_title"))}</strong><span>{safe(s.get("session_date"))}</span></div>'
+                    f'<b>{int(s.get("minutes") or s.get("duration_minutes") or 0)} min</b>'
                     '</div>'
                 )
             )
@@ -1055,7 +1231,51 @@ def render_training(user_id):
                     "notes": effort + (f" — {note.strip()}" if note.strip() else ""),
                 }
             ).execute()
-            st.success("Training saved.")
+
+            program = get_program(user_id)
+
+            if program:
+                day_log = get_daily_log(
+                    user_id,
+                    training_date,
+                ) or {}
+
+                values = {
+                    "wake_by_8": bool(day_log.get("wake_by_8")),
+                    "lunch_cardio": bool(day_log.get("lunch_cardio")),
+                    "evening_training": session not in ["Recovery / rest"],
+                    "cooked": bool(day_log.get("cooked")),
+                    "calorie_target_hit": bool(day_log.get("calorie_target_hit")),
+                    "protein_target_hit": bool(day_log.get("protein_target_hit")),
+                    "calories_actual": int(day_log.get("calories_actual") or 0),
+                    "protein_actual": int(day_log.get("protein_actual") or 0),
+                    "study_minutes": int(day_log.get("study_minutes") or 0),
+                    "business_minutes": int(day_log.get("business_minutes") or 0),
+                    "art_minutes": int(day_log.get("art_minutes") or 0),
+                    "room_tidy": bool(day_log.get("room_tidy")),
+                    "bed_by_23": bool(day_log.get("bed_by_23")),
+                    "sleep_hours": float(day_log.get("sleep_hours") or 0),
+                    "notes": day_log.get("notes") or "",
+                }
+
+                if session in ["Lunch movement", "Both"]:
+                    values["lunch_cardio"] = True
+
+                if session == "Both":
+                    values["evening_training"] = True
+
+                values["daily_score"] = native_daily_score(
+                    values,
+                    program,
+                )
+
+                save_daily_log(
+                    user_id,
+                    training_date,
+                    values,
+                )
+
+            st.success("Training saved and daily progress synced.")
             st.rerun()
 
     workouts = get_workouts(user_id)[:8]
@@ -1100,9 +1320,21 @@ def render_tasks(user_id):
             with right:
                 priority = st.selectbox("Priority", ["High", "Medium", "Low"], index=1)
                 task_date = st.date_input("Date", value=now_local().date())
-                use_time = st.checkbox("Add time")
-                task_time = st.time_input("Time", value=time(9, 0), disabled=not use_time)
-                category = st.selectbox("Category", ["Personal", "Work", "Study", "Business", "Gym", "Other"])
+                use_time = st.checkbox("Add time range")
+                task_time = st.time_input(
+                    "Start time",
+                    value=time(9, 0),
+                    disabled=not use_time,
+                )
+                task_end_time = st.time_input(
+                    "End time",
+                    value=time(9, 30),
+                    disabled=not use_time,
+                )
+                category = st.selectbox(
+                    "Category",
+                    ["Personal", "Work", "Study", "Business", "Gym", "Other"],
+                )
 
             if st.form_submit_button("Save task", type="primary", use_container_width=True):
                 if title.strip():
@@ -1113,6 +1345,7 @@ def render_tasks(user_id):
                         priority,
                         task_date,
                         task_time if use_time else None,
+                        task_end_time if use_time else None,
                         category,
                     )
                     st.rerun()
@@ -1133,7 +1366,21 @@ def render_tasks(user_id):
         filtered = [t for t in filtered if not t.get("completed")]
 
     for task in filtered[:30]:
-        task_time_text = f" · {str(task['task_time'])[:5]}" if task.get("task_time") else ""
+        task_time_text = ""
+
+        if task.get("task_time"):
+            start_text = str(task["task_time"])[:5]
+            end_text = (
+                str(task.get("task_end_time"))[:5]
+                if task.get("task_end_time")
+                else None
+            )
+
+            task_time_text = (
+                f" · {start_text}–{end_text}"
+                if end_text
+                else f" · {start_text}"
+            )
         render_html(
             f"""
             <article class="task-card">
@@ -1202,6 +1449,7 @@ def render_tasks(user_id):
                     "Medium",
                     now_local().date(),
                     None,
+                    None,
                     item.get("category") if item.get("category") in ["Study", "Business", "Personal"] else "Personal",
                 )
                 supabase.table("lockin_inbox").update({"status": "planned"}).eq("id", item["id"]).eq("user_id", user_id).execute()
@@ -1238,6 +1486,36 @@ def render_review(user_id):
     logs = get_logs(user_id)
     workouts = get_workouts(user_id)
     focus_sessions = get_focus_sessions(user_id)
+    body_weights = get_body_weights(user_id)
+
+    total_focus_minutes = sum(
+        int(
+            row.get("minutes")
+            or row.get("duration_minutes")
+            or 0
+        )
+        for row in focus_sessions
+    )
+
+    total_workout_minutes = sum(
+        int(row.get("duration_minutes") or 0)
+        for row in workouts
+    )
+
+    stat_grid(
+        [
+            ("FOCUS", f"{total_focus_minutes} min", f"{len(focus_sessions)} blocks"),
+            ("WORKOUTS", f"{len(workouts)}", f"{total_workout_minutes} total min"),
+            (
+                "WEIGHT",
+                f"{float(body_weights[-1]['weight_kg']):.1f} kg"
+                if body_weights
+                else "—",
+                "latest",
+            ),
+            ("STRONG DAY", "70%+", "native app rule"),
+        ]
+    )
 
     st.markdown('<div class="section-head"><span>90 DAYS</span><h2>Your map</h2></div>', unsafe_allow_html=True)
     ninety_day_map(program, logs)
@@ -1245,11 +1523,10 @@ def render_review(user_id):
     if logs:
         rows = []
         for row in logs:
-            done, total = score_log(row, program)
             rows.append(
                 {
                     "date": row["log_date"],
-                    "completion": round(done / total * 100),
+                    "completion": native_daily_score(row, program),
                     "study": int(row.get("study_minutes") or 0),
                     "business": int(row.get("business_minutes") or 0),
                     "art": int(row.get("art_minutes") or 0),
@@ -1270,6 +1547,43 @@ def render_review(user_id):
 
         st.markdown('<div class="section-head"><span>TREND</span><h2>Consistency</h2></div>', unsafe_allow_html=True)
         st.line_chart(df.set_index("date")["completion"])
+
+    st.markdown(
+        '<div class="section-head"><span>BODY</span><h2>Weight progression</h2></div>',
+        unsafe_allow_html=True,
+    )
+
+    if body_weights:
+        weight_df = pd.DataFrame(
+            [
+                {
+                    "date": row["log_date"],
+                    "weight_kg": float(row["weight_kg"]),
+                }
+                for row in body_weights
+            ]
+        )
+
+        first_weight = float(body_weights[0]["weight_kg"])
+        latest_weight = float(body_weights[-1]["weight_kg"])
+        seven = weight_df.tail(7)
+
+        stat_grid(
+            [
+                ("START", f"{first_weight:.1f} kg", "first weigh-in"),
+                ("CURRENT", f"{latest_weight:.1f} kg", "latest weigh-in"),
+                ("CHANGE", f"{latest_weight - first_weight:+.1f} kg", "overall"),
+                ("7-DAY AVG", f"{seven['weight_kg'].mean():.1f} kg", "recent trend"),
+            ]
+        )
+
+        st.line_chart(
+            weight_df.set_index("date")["weight_kg"]
+        )
+    else:
+        st.info(
+            "No body-weight entries yet. Add one on Today or from the iPhone app."
+        )
 
     st.markdown('<div class="section-head"><span>WEEKLY REVIEW</span><h2>Close the loop</h2></div>', unsafe_allow_html=True)
     today = now_local().date()
