@@ -603,6 +603,157 @@ def stat_grid(items):
         )
     render_html('<section class="mini-stat-grid">' + "".join(cards) + '</section>')
 
+def sync_strip():
+    render_html(
+        """
+        <section class="sync-strip">
+          <div class="sync-dot"></div>
+          <div>
+            <strong>LOCKZILLA CLOUD</strong>
+            <span>iPhone + Streamlit · Supabase connected</span>
+          </div>
+          <b>SYNCED</b>
+        </section>
+        """
+    )
+
+
+def today_progress_card(day_num, day_pct, programme_pct, streak):
+    ring = max(0, min(100, int(day_pct)))
+    journey = max(0, min(100, int(programme_pct)))
+
+    render_html(
+        f"""
+        <section class="today-progress">
+          <div class="today-progress-copy">
+            <div class="kicker">TODAY'S POSITION</div>
+            <div class="today-score-line">
+              <strong>{ring}%</strong>
+              <span>daily score</span>
+            </div>
+            <div class="today-progress-meta">
+              <span>DAY {int(day_num)} / 90</span>
+              <span>{int(streak)} DAY STREAK</span>
+            </div>
+          </div>
+          <div class="today-rings">
+            <div class="score-ring" style="--score:{ring * 3.6}deg">
+              <div><b>{ring}%</b><small>TODAY</small></div>
+            </div>
+            <div class="journey-bar">
+              <div class="journey-label">
+                <span>90-DAY JOURNEY</span>
+                <b>{journey}%</b>
+              </div>
+              <div class="journey-track"><i style="width:{journey}%"></i></div>
+            </div>
+          </div>
+        </section>
+        """
+    )
+
+
+def review_momentum_hero(current_streak_value, best_streak_value, avg_score, strong_days, programme_day):
+    render_html(
+        f"""
+        <section class="review-momentum">
+          <div class="review-momentum-copy">
+            <div class="kicker on-dark">MOMENTUM</div>
+            <h2>{int(current_streak_value)} <span>DAY STREAK</span></h2>
+            <p>Strong days are 70%+ completion. Keep stacking evidence.</p>
+          </div>
+          <div class="review-momentum-grid">
+            <div><span>BEST</span><b>{int(best_streak_value)}</b><small>days</small></div>
+            <div><span>AVG SCORE</span><b>{int(avg_score)}%</b><small>logged days</small></div>
+            <div><span>STRONG</span><b>{int(strong_days)}</b><small>days</small></div>
+            <div><span>PROGRAMME</span><b>D{int(programme_day)}</b><small>of 90</small></div>
+          </div>
+        </section>
+        """
+    )
+
+
+def milestone_strip(programme_day):
+    milestones = [7, 30, 60, 90]
+    pieces = []
+
+    for day in milestones:
+        unlocked = programme_day >= day
+        cls = "unlocked" if unlocked else "locked"
+        icon = "✓" if unlocked else str(day)
+        pieces.append(
+            f"""
+            <div class="milestone {cls}">
+              <div>{icon}</div>
+              <span>DAY {day}</span>
+            </div>
+            """
+        )
+
+    render_html(
+        '<section class="milestone-card">'
+        '<div class="milestone-copy"><span>MILESTONES</span><strong>The road to Day 90</strong></div>'
+        '<div class="milestone-row">' + "".join(pieces) + '</div></section>'
+    )
+
+
+def activity_feed(focus_sessions, workouts, body_weights):
+    events = []
+
+    for row in focus_sessions[:8]:
+        when = row.get("completed_at") or row.get("created_at") or row.get("session_date")
+        events.append(
+            (
+                str(when or ""),
+                "FOCUS",
+                row.get("focus_type") or row.get("block_title") or "Focus",
+                f"{int(row.get('minutes') or row.get('duration_minutes') or 0)} min",
+            )
+        )
+
+    for row in workouts[:8]:
+        when = row.get("created_at") or row.get("workout_date")
+        events.append(
+            (
+                str(when or ""),
+                "TRAINING",
+                row.get("session") or "Workout",
+                f"{int(row.get('duration_minutes') or 0)} min",
+            )
+        )
+
+    for row in reversed(body_weights[-8:]):
+        events.append(
+            (
+                str(row.get("log_date") or ""),
+                "BODY",
+                "Weigh-in",
+                f"{float(row.get('weight_kg') or 0):.1f} kg",
+            )
+        )
+
+    events = sorted(events, key=lambda x: x[0], reverse=True)[:8]
+
+    if not events:
+        return
+
+    rows = []
+    for _, category, title, detail in events:
+        rows.append(
+            f"""
+            <div class="activity-row">
+              <span>{safe(category)}</span>
+              <strong>{safe(title)}</strong>
+              <b>{safe(detail)}</b>
+            </div>
+            """
+        )
+
+    render_html(
+        '<section class="activity-card">' + "".join(rows) + "</section>"
+    )
+
+
 def command_card(name, detail, when, category):
     render_html(
         f"""
@@ -878,11 +1029,25 @@ def render_today(user_id):
         """
     )
 
+    streak_value = current_streak(logs, program)
+
+    sync_strip()
+    today_progress_card(
+        day_num,
+        day_pct,
+        programme_pct,
+        streak_value,
+    )
+
     stat_grid(
         [
-            ("TODAY", f"{day_pct}%", "9-part Lockzilla score"),
-            ("STREAK", f"{current_streak(logs, program)} days", "70%+ strong day"),
             ("SLEEP", f"{float(log.get('sleep_hours') or 0):.1f}h", "recovery"),
+            (
+                "FOCUS",
+                f"{int(log.get('study_minutes') or 0) + int(log.get('business_minutes') or 0) + int(log.get('art_minutes') or 0)}m",
+                "today",
+            ),
+            ("NEXT", next_time, next_name),
             ("FINISH", end.strftime("%d %b"), "day 90"),
         ]
     )
@@ -989,10 +1154,22 @@ def render_today(user_id):
 
     if latest_weight is not None:
         change = float(latest_weight) - float(first_weight)
+        recent_weights = [
+            float(row["weight_kg"])
+            for row in weights[-7:]
+        ]
+        seven_day_avg = (
+            sum(recent_weights) / len(recent_weights)
+            if recent_weights
+            else float(latest_weight)
+        )
+
         stat_grid(
             [
                 ("CURRENT", f"{float(latest_weight):.1f} kg", "latest"),
                 ("CHANGE", f"{change:+.1f} kg", "since first weigh-in"),
+                ("7-DAY AVG", f"{seven_day_avg:.1f} kg", "trend"),
+                ("WEIGH-INS", f"{len(weights)}", "synced entries"),
             ]
         )
 
@@ -1502,6 +1679,57 @@ def render_review(user_id):
         for row in workouts
     )
 
+    today = now_local().date()
+    start_date = date.fromisoformat(program["start_date"])
+    programme_day = max(
+        1,
+        min(90, (today - start_date).days + 1),
+    )
+
+    score_values = [
+        native_daily_score(row, program)
+        for row in logs
+    ]
+    avg_score_all = (
+        round(sum(score_values) / len(score_values))
+        if score_values
+        else 0
+    )
+    strong_days = sum(
+        1 for value in score_values
+        if value >= 70
+    )
+
+    lookup = {
+        date.fromisoformat(row["log_date"]):
+            native_daily_score(row, program)
+        for row in logs
+    }
+
+    best_streak_value = 0
+    running_streak = 0
+    cursor = start_date
+
+    while cursor <= today:
+        if lookup.get(cursor, 0) >= 70:
+            running_streak += 1
+            best_streak_value = max(
+                best_streak_value,
+                running_streak,
+            )
+        else:
+            running_streak = 0
+
+        cursor += timedelta(days=1)
+
+    review_momentum_hero(
+        current_streak(logs, program),
+        best_streak_value,
+        avg_score_all,
+        strong_days,
+        programme_day,
+    )
+
     stat_grid(
         [
             ("FOCUS", f"{total_focus_minutes} min", f"{len(focus_sessions)} blocks"),
@@ -1513,9 +1741,11 @@ def render_review(user_id):
                 else "—",
                 "latest",
             ),
-            ("STRONG DAY", "70%+", "native app rule"),
+            ("LOGGED DAYS", f"{len(logs)}", "daily records"),
         ]
     )
+
+    milestone_strip(programme_day)
 
     st.markdown('<div class="section-head"><span>90 DAYS</span><h2>Your map</h2></div>', unsafe_allow_html=True)
     ninety_day_map(program, logs)
@@ -1538,10 +1768,10 @@ def render_review(user_id):
         last7 = df.tail(7)
         stat_grid(
             [
-                ("AVG SCORE", f"{round(last7['completion'].mean())}%", "last 7 logged days"),
+                ("7-DAY SCORE", f"{round(last7['completion'].mean())}%", "consistency"),
                 ("STUDY", f"{int(last7['study'].sum())} min", "last 7 logged days"),
                 ("BUSINESS", f"{int(last7['business'].sum())} min", "last 7 logged days"),
-                ("WORKOUTS", len([x for x in workouts if x.get("workout_date") >= str(now_local().date() - timedelta(days=6))]), "last 7 days"),
+                ("ART", f"{int(last7['art'].sum())} min", "last 7 logged days"),
             ]
         )
 
@@ -1584,6 +1814,16 @@ def render_review(user_id):
         st.info(
             "No body-weight entries yet. Add one on Today or from the iPhone app."
         )
+
+    st.markdown(
+        '<div class="section-head"><span>RECENT</span><h2>Activity</h2></div>',
+        unsafe_allow_html=True,
+    )
+    activity_feed(
+        focus_sessions,
+        workouts,
+        body_weights,
+    )
 
     st.markdown('<div class="section-head"><span>WEEKLY REVIEW</span><h2>Close the loop</h2></div>', unsafe_allow_html=True)
     today = now_local().date()
